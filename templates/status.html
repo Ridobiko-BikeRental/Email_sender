@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h3><i class="fas fa-chart-line"></i> Email Sending Status</h3>
+                <a href="{{ url_for('logs') }}" class="btn btn-info">
+                    <i class="fas fa-history"></i> View Logs
+                </a>
+            </div>
+            <div class="card-body">
+                {% if status.is_sending %}
+                    <div class="alert alert-info">
+                        <strong><i class="fas fa-spinner fa-spin"></i> Sending emails in progress...</strong>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">Current Email:</label>
+                        <div class="form-control" id="current-email">{{ status.current_email }}</div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="card bg-primary text-white">
+                                <div class="card-body text-center">
+                                    <h4 id="total-emails">{{ status.total_emails }}</h4>
+                                    <p>Total Emails</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card bg-success text-white">
+                                <div class="card-body text-center">
+                                    <h4 id="sent-count">{{ status.sent_count }}</h4>
+                                    <p>Sent Successfully</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card bg-danger text-white">
+                                <div class="card-body text-center">
+                                    <h4 id="failed-count">{{ status.failed_count }}</h4>
+                                    <p>Failed</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="card bg-info text-white">
+                                <div class="card-body text-center">
+                                    <h4 id="progress-percent">
+                                        {% if status.total_emails > 0 %}
+                                            {{ ((status.sent_count + status.failed_count) / status.total_emails * 100) | round(1) }}%
+                                        {% else %}
+                                            0%
+                                        {% endif %}
+                                    </h4>
+                                    <p>Progress</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-4">
+                        <div class="progress">
+                            <div class="progress-bar" role="progressbar" 
+                                 style="width: {% if status.total_emails > 0 %}{{ ((status.sent_count + status.failed_count) / status.total_emails * 100) }}%{% else %}0%{% endif %}"
+                                 id="progress-bar">
+                            </div>
+                        </div>
+                    </div>
+                    
+                {% else %}
+                    <div class="alert alert-secondary">
+                        <strong><i class="fas fa-info-circle"></i> No email sending in progress</strong>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="card bg-success text-white">
+                                <div class="card-body text-center">
+                                    <h4>{{ status.sent_count }}</h4>
+                                    <p>Last Session - Sent</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card bg-danger text-white">
+                                <div class="card-body text-center">
+                                    <h4>{{ status.failed_count }}</h4>
+                                    <p>Last Session - Failed</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card bg-primary text-white">
+                                <div class="card-body text-center">
+                                    <h4>{{ status.total_emails }}</h4>
+                                    <p>Last Session - Total</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {% endif %}
+                
+                <div class="mt-4">
+                    <a href="{{ url_for('index') }}" class="btn btn-primary">
+                        <i class="fas fa-arrow-left"></i> Back to Upload
+                    </a>
+                </div>
+            </div>
+        </div>
+        
+        {% if status.failed_emails %}
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5><i class="fas fa-exclamation-triangle"></i> Failed Emails</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Email</th>
+                                <th>Error</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for failed_email in status.failed_emails[:10] %}
+                            <tr>
+                                <td>{{ failed_email.split(':')[0] }}</td>
+                                <td>{{ ':'.join(failed_email.split(':')[1:]) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% if status.failed_emails|length > 10 %}
+                <p class="text-muted">Showing first 10 failed emails. Check logs for complete list.</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if status.is_sending %}
+<script>
+// Auto-refresh status every 2 seconds
+setInterval(function() {
+    fetch('/api/status')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('current-email').textContent = data.current_email;
+            document.getElementById('sent-count').textContent = data.sent_count;
+            document.getElementById('failed-count').textContent = data.failed_count;
+            
+            if (data.total_emails > 0) {
+                const progress = ((data.sent_count + data.failed_count) / data.total_emails * 100);
+                document.getElementById('progress-percent').textContent = progress.toFixed(1) + '%';
+                document.getElementById('progress-bar').style.width = progress + '%';
+            }
+            
+            // If sending is complete, reload the page
+            if (!data.is_sending) {
+                location.reload();
+            }
+        });
+}, 2000);
+</script>
+{% endif %}
+{% endblock %}

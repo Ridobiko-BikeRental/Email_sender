@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h3><i class="fas fa-edit"></i> Compose Bulk Email</h3>
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('send_emails') }}" method="post">
+                    <input type="hidden" name="filename" value="{{ filename }}">
+                    
+                    {% if has_default_credentials %}
+                    <div class="alert alert-success mb-3">
+                        <i class="fas fa-check-circle"></i> 
+                        <strong>Sender Email Configured:</strong> {{ default_sender_email }}
+                        <small class="d-block mt-1">Emails will be sent from this configured account.</small>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-danger mb-3">
+                        <i class="fas fa-exclamation-triangle"></i> 
+                        <strong>Email Not Configured:</strong> Please contact administrator to configure sender email credentials.
+                    </div>
+                    {% endif %}
+
+                    <div class="mb-3">
+                        <label for="email_column" class="form-label">Email Column:</label>
+                        <select class="form-select" id="email_column" name="email_column" required>
+                            <option value="">Select the column containing email addresses</option>
+                            {% for column in columns %}
+                                <option value="{{ column }}" 
+                                    {% if 'email' in column.lower() or 'mail' in column.lower() %}selected{% endif %}>
+                                    {{ column }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="subject" class="form-label">Email Subject:</label>
+                        <input type="text" class="form-control" id="subject" name="subject" required 
+                               placeholder="Your email subject here">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="template" class="form-label">Email Template:</label>
+                        <textarea class="form-control template-editor" id="template" name="template" required 
+                                  placeholder="Write your email template here. Use placeholders like {Name}, {Company} to personalize emails."></textarea>
+                        <div class="form-text">
+                            Available placeholders: 
+                            {% for column in columns %}
+                                <span class="placeholder-tag" onclick="insertPlaceholder('{{ column }}')">{{ column }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="delay" class="form-label">Delay between emails (seconds):</label>
+                        <input type="number" class="form-control" id="delay" name="delay" value="1" min="1" max="10">
+                        <div class="form-text">Recommended: 1-2 seconds to avoid being flagged as spam</div>
+                    </div>
+
+                    {% if has_default_credentials %}
+                    <button type="submit" class="btn btn-success btn-lg">
+                        <i class="fas fa-paper-plane"></i> Send Bulk Emails
+                    </button>
+                    {% else %}
+                    <button type="button" class="btn btn-secondary btn-lg" disabled>
+                        <i class="fas fa-times"></i> Email Not Configured
+                    </button>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-table"></i> File Preview</h5>
+            </div>
+            <div class="card-body">
+                <div class="preview-table">
+                    <table class="table table-sm table-striped">
+                        <thead>
+                            <tr>
+                                {% for column in columns %}
+                                <th>{{ column }}</th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in sample_data[:5] %}
+                            <tr>
+                                {% for column in columns %}
+                                <td>{{ row[column] if row[column] else '' }}</td>
+                                {% endfor %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% if sample_data|length > 5 %}
+                    <p class="text-muted small">Showing first 5 rows of {{ sample_data|length }} total records</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-lightbulb"></i> Tips</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-unstyled mb-0">
+                    <li><i class="fas fa-check text-success"></i> Use placeholders like <code>{Name}</code> for personalization</li>
+                    <li><i class="fas fa-check text-success"></i> HTML formatting is supported</li>
+                    <li><i class="fas fa-check text-success"></i> Test with a small file first</li>
+                    <li><i class="fas fa-check text-success"></i> Check spam folder if emails don't arrive</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.template-editor {
+    min-height: 200px;
+    font-family: monospace;
+}
+
+.placeholder-tag {
+    display: inline-block;
+    background: #e9ecef;
+    border: 1px solid #ced4da;
+    border-radius: 3px;
+    padding: 2px 6px;
+    margin: 2px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+
+.placeholder-tag:hover {
+    background: #007bff;
+    color: white;
+}
+
+.preview-table {
+    max-height: 300px;
+    overflow: auto;
+}
+
+.preview-table table {
+    font-size: 0.8em;
+}
+</style>
+
+<script>
+function insertPlaceholder(columnName) {
+    const textarea = document.getElementById('template');
+    const placeholder = '{' + columnName + '}';
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = textarea.value;
+    
+    textarea.value = text.substring(0, start) + placeholder + text.substring(end);
+    textarea.selectionStart = textarea.selectionEnd = start + placeholder.length;
+    textarea.focus();
+}
+</script>
+
+{% endblock %}

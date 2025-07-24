@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: bulk-emailer
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SENDER_EMAIL
+        sync: false
+      - key: SENDER_APP_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true

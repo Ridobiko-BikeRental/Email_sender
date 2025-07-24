@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h3><i class="fas fa-history"></i> Email Sending Logs</h3>
+                <a href="{{ url_for('status') }}" class="btn btn-primary">
+                    <i class="fas fa-chart-line"></i> Current Status
+                </a>
+            </div>
+            <div class="card-body">
+                {% if logs %}
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Date & Time</th>
+                                    <th>Duration</th>
+                                    <th>Total Emails</th>
+                                    <th>Sent Successfully</th>
+                                    <th>Failed</th>
+                                    <th>Success Rate</th>
+                                    <th>Subject</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for log in logs %}
+                                <tr>
+                                    <td>
+                                        {{ log.timestamp.split('T')[0] }}<br>
+                                        <small class="text-muted">{{ log.timestamp.split('T')[1].split('.')[0] }}</small>
+                                    </td>
+                                    <td>{{ "%.1f"|format(log.duration_seconds) }}s</td>
+                                    <td>{{ log.total_emails }}</td>
+                                    <td>
+                                        <span class="badge bg-success">{{ log.sent_count }}</span>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-danger">{{ log.failed_count }}</span>
+                                    </td>
+                                    <td>
+                                        {% if log.total_emails > 0 %}
+                                            {{ "%.1f"|format((log.sent_count / log.total_emails) * 100) }}%
+                                        {% else %}
+                                            0%
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ log.subject[:50] }}{% if log.subject|length > 50 %}...{% endif %}</td>
+                                    <td>
+                                        <button class="btn btn-sm btn-info" 
+                                                onclick="showLogDetails('{{ loop.index0 }}')">
+                                            <i class="fas fa-eye"></i> Details
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle"></i> No email logs found. Send some emails first!
+                    </div>
+                {% endif %}
+                
+                <div class="mt-4">
+                    <a href="{{ url_for('index') }}" class="btn btn-primary">
+                        <i class="fas fa-arrow-left"></i> Back to Upload
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal for log details -->
+<div class="modal fade" id="logDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Email Log Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="logDetailsBody">
+                <!-- Content will be loaded here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const logs = {{ logs | tojson }};
+
+function showLogDetails(index) {
+    const log = logs[index];
+    let html = `
+        <h6>Session Summary</h6>
+        <table class="table table-sm">
+            <tr><td><strong>Date:</strong></td><td>${log.timestamp}</td></tr>
+            <tr><td><strong>Duration:</strong></td><td>${log.duration_seconds.toFixed(1)} seconds</td></tr>
+            <tr><td><strong>Sender:</strong></td><td>${log.sender_email}</td></tr>
+            <tr><td><strong>Subject:</strong></td><td>${log.subject}</td></tr>
+            <tr><td><strong>Total Emails:</strong></td><td>${log.total_emails}</td></tr>
+            <tr><td><strong>Sent Successfully:</strong></td><td><span class="badge bg-success">${log.sent_count}</span></td></tr>
+            <tr><td><strong>Failed:</strong></td><td><span class="badge bg-danger">${log.failed_count}</span></td></tr>
+        </table>
+    `;
+    
+    if (log.success_emails && log.success_emails.length > 0) {
+        html += `
+            <h6 class="mt-4">Successfully Sent To:</h6>
+            <div style="max-height: 200px; overflow-y: auto;">
+                <ul class="list-group list-group-flush">
+        `;
+        log.success_emails.forEach(email => {
+            html += `<li class="list-group-item">${email}</li>`;
+        });
+        html += `</ul></div>`;
+    }
+    
+    if (log.failed_emails && log.failed_emails.length > 0) {
+        html += `
+            <h6 class="mt-4">Failed Emails:</h6>
+            <div style="max-height: 200px; overflow-y: auto;">
+                <ul class="list-group list-group-flush">
+        `;
+        log.failed_emails.forEach(failedEmail => {
+            const [email, error] = failedEmail.split(': ');
+            html += `<li class="list-group-item"><strong>${email}</strong><br><small class="text-muted">${error}</small></li>`;
+        });
+        html += `</ul></div>`;
+    }
+    
+    document.getElementById('logDetailsBody').innerHTML = html;
+    new bootstrap.Modal(document.getElementById('logDetailsModal')).show();
+}
+</script>
+{% endblock %}
