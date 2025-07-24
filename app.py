@@ -1,5 +1,5 @@
 import os
-import pandas as pd
+import csv
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 import json
 from dotenv import load_dotenv
+from openpyxl import load_workbook
 
 # Load environment variables
 load_dotenv()
@@ -60,19 +61,79 @@ email_status = {
     'success_emails': []
 }
 
+class SimpleDataFrame:
+    """Simple DataFrame-like class to replace pandas"""
+    def __init__(self, data, columns):
+        self.data = data
+        self.columns = columns
+    
+    def head(self, n=5):
+        return SimpleDataFrame(self.data[:n], self.columns)
+    
+    def to_dict(self, orient='records'):
+        return self.data
+    
+    def iterrows(self):
+        for i, row in enumerate(self.data):
+            yield i, row
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, column):
+        return [row.get(column, '') for row in self.data]
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def read_csv_file(filepath):
+    """Read CSV file"""
+    try:
+        data = []
+        with open(filepath, 'r', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            columns = list(reader.fieldnames)
+            for row in reader:
+                data.append(dict(row))
+        return SimpleDataFrame(data, columns)
+    except Exception as e:
+        logger.error(f"Error reading CSV file: {e}")
+        return None
+
+def read_excel_file(filepath):
+    """Read Excel file using openpyxl"""
+    try:
+        workbook = load_workbook(filepath)
+        sheet = workbook.active
+        
+        # Get column names from first row
+        columns = [str(cell.value) for cell in sheet[1] if cell.value is not None]
+        
+        # Get data from remaining rows
+        data = []
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            row_dict = {}
+            for i, value in enumerate(row):
+                if i < len(columns):
+                    row_dict[columns[i]] = str(value) if value is not None else ""
+            # Only add row if it has some data
+            if any(value.strip() for value in row_dict.values() if value):
+                data.append(row_dict)
+        
+        return SimpleDataFrame(data, columns)
+    except Exception as e:
+        logger.error(f"Error reading Excel file: {e}")
+        return None
+
 def read_file(filepath):
-    """Read CSV or Excel file and return DataFrame"""
+    """Read CSV or Excel file and return SimpleDataFrame"""
     try:
         if filepath.endswith('.csv'):
-            df = pd.read_csv(filepath)
+            return read_csv_file(filepath)
         elif filepath.endswith(('.xlsx', '.xls')):
-            df = pd.read_excel(filepath)
+            return read_excel_file(filepath)
         else:
             return None
-        return df
     except Exception as e:
         logger.error(f"Error reading file: {e}")
         return None
@@ -127,7 +188,7 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
         return False, f"Column '{email_column}' not found in file"
     
     # Filter out empty emails and count total
-    valid_emails = df[df[email_column].notna() & (df[email_column] != '')]
+    valid_emails = [row for row in df.data if row.get(email_column, '').strip()]
     email_status['total_emails'] = len(valid_emails)
     
     logger.info(f"Starting bulk email sending to {email_status['total_emails']} recipients")
@@ -135,8 +196,8 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
     
-    for index, row in valid_emails.iterrows():
-        email = row[email_column]
+    for index, row in enumerate(valid_emails):
+        email = row.get(email_column, '').strip()
         email_status['current_email'] = email
         
         # Replace placeholders in template with row data
@@ -144,7 +205,7 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
         for col in df.columns:
             placeholder = f"{{{col}}}"
             if placeholder in personalized_message:
-                value = row[col] if not pd.isna(row[col]) else ""
+                value = row.get(col, "")
                 personalized_message = personalized_message.replace(placeholder, str(value))
         
         success, error_msg = send_email_smtp(
@@ -218,10 +279,11 @@ def upload_file():
         df = read_file(filepath)
         if df is not None:
             columns = list(df.columns)
+            sample_data = df.head().to_dict('records')
             return render_template('compose.html', 
                                  filename=filename, 
                                  columns=columns,
-                                 sample_data=df.head().to_dict('records'),
+                                 sample_data=sample_data,
                                  default_sender_email=DEFAULT_SENDER_EMAIL,
                                  has_default_credentials=bool(DEFAULT_SENDER_EMAIL and DEFAULT_SENDER_PASSWORD))
         else:
