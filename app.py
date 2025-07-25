@@ -12,6 +12,7 @@ from datetime import datetime
 import json
 from dotenv import load_dotenv
 from openpyxl import load_workbook
+import html
 
 # Load environment variables
 load_dotenv()
@@ -139,15 +140,51 @@ def read_file(filepath):
         logger.error(f"Error reading file: {e}")
         return None
 
+def format_email_content(content):
+    """Convert plain text to HTML while preserving formatting"""
+    # Escape HTML characters first
+    content = html.escape(content)
+    
+    # Convert line breaks to HTML breaks
+    content = content.replace('\n', '<br>')
+    
+    # Convert multiple spaces to non-breaking spaces (preserve spacing)
+    content = content.replace('  ', '&nbsp;&nbsp;')
+    
+    # Convert tabs to spaces
+    content = content.replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
+    
+    # Wrap in a div with proper styling to preserve formatting
+    formatted_content = f'''
+    <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                font-size: 14px; 
+                line-height: 1.5; 
+                white-space: pre-wrap; 
+                word-wrap: break-word;">
+        {content}
+    </div>
+    '''
+    
+    return formatted_content
+
 def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recipient_email, subject, body):
     """Send individual email via SMTP"""
     try:
-        msg = MIMEMultipart()
+        msg = MIMEMultipart('alternative')
         msg['From'] = sender_email
         msg['To'] = recipient_email
         msg['Subject'] = subject
         
-        msg.attach(MIMEText(body, 'html'))
+        # Format the body to preserve formatting
+        formatted_body = format_email_content(body)
+        
+        # Create both plain text and HTML versions
+        text_part = MIMEText(body, 'plain', 'utf-8')
+        html_part = MIMEText(formatted_body, 'html', 'utf-8')
+        
+        # Attach parts to message
+        msg.attach(text_part)
+        msg.attach(html_part)
         
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()

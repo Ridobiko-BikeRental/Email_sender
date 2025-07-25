@@ -65,8 +65,26 @@
 
                             <div class="mb-3">
                                 <label for="template" class="form-label">Email Template:</label>
+                                <div class="mb-2">
+                                    <small class="text-muted">
+                                        <i class="fas fa-info-circle"></i> 
+                                        <strong>Formatting preserved:</strong> Line breaks, spaces, bullet points, and emojis will be maintained as you type them.
+                                    </small>
+                                </div>
                                 <textarea class="form-control template-editor" id="template" name="template" required 
-                                          placeholder="Write your email template here. Use placeholders like {Name}, {Company} to personalize emails."></textarea>
+                                          placeholder="Write your email template here. Use placeholders like {Name}, {Company} to personalize emails.
+
+Example:
+Hi {Name} 👋
+
+We hope you're doing well! Here are some key points:
+
+• Point 1 with proper spacing
+• Point 2 with emojis 📧
+• Point 3 with line breaks
+
+Best regards,
+Your Team 😊"></textarea>
                                 <div class="form-text">
                                     Available placeholders: 
                                     {% for column in columns %}
@@ -125,12 +143,24 @@
 
         <div class="card mt-3">
             <div class="card-header">
+                <h5><i class="fas fa-eye"></i> Preview</h5>
+            </div>
+            <div class="card-body">
+                <div class="preview-content" id="email-preview">
+                    <div class="text-muted">Email preview will appear here as you type...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
                 <h5><i class="fas fa-lightbulb"></i> Tips</h5>
             </div>
             <div class="card-body">
                 <ul class="list-unstyled mb-0">
                     <li><i class="fas fa-check text-success"></i> Use placeholders like <code>{Name}</code> for personalization</li>
-                    <li><i class="fas fa-check text-success"></i> HTML formatting is supported</li>
+                    <li><i class="fas fa-check text-success"></i> Formatting (spaces, line breaks, bullets) is preserved</li>
+                    <li><i class="fas fa-check text-success"></i> Emojis are fully supported 😊</li>
                     <li><i class="fas fa-check text-success"></i> Use Gmail App Password for security</li>
                     <li><i class="fas fa-check text-success"></i> Test with a small file first</li>
                     <li><i class="fas fa-check text-success"></i> Check spam folder if emails don't arrive</li>
@@ -155,8 +185,13 @@
 
 <style>
 .template-editor {
-    min-height: 200px;
-    font-family: monospace;
+    min-height: 250px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    resize: vertical;
 }
 
 .placeholder-tag {
@@ -168,11 +203,14 @@
     margin: 2px;
     cursor: pointer;
     font-size: 0.85em;
+    transition: all 0.2s ease;
 }
 
 .placeholder-tag:hover {
     background: #007bff;
     color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,123,255,0.3);
 }
 
 .preview-table {
@@ -183,9 +221,47 @@
 .preview-table table {
     font-size: 0.8em;
 }
+
+.preview-content {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 15px;
+    min-height: 120px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.preview-content.has-content {
+    background: white;
+    border-color: #28a745;
+}
+
+/* Ensure emojis display properly */
+.template-editor, .preview-content {
+    font-feature-settings: "liga" 1, "kern" 1;
+    -webkit-font-feature-settings: "liga" 1, "kern" 1;
+    -moz-font-feature-settings: "liga" 1, "kern" 1;
+    text-rendering: optimizeLegibility;
+}
+
+/* Preserve formatting in textarea */
+.template-editor:focus {
+    border-color: #28a745;
+    box-shadow: 0 0 0 0.2rem rgba(40, 167, 69, 0.25);
+}
 </style>
 
 <script>
+// Define columns and sample data globally
+const columns = {{ columns | tojson | safe }};
+const sampleData = {% if sample_data and sample_data|length > 0 %}{{ sample_data[0] | tojson | safe }}{% else %}{}{% endif %};
+
 function insertPlaceholder(columnName) {
     const textarea = document.getElementById('template');
     const placeholder = '{' + columnName + '}';
@@ -196,7 +272,70 @@ function insertPlaceholder(columnName) {
     textarea.value = text.substring(0, start) + placeholder + text.substring(end);
     textarea.selectionStart = textarea.selectionEnd = start + placeholder.length;
     textarea.focus();
+    
+    // Update preview after inserting placeholder
+    updatePreview();
 }
+
+function updatePreview() {
+    const template = document.getElementById('template').value;
+    const preview = document.getElementById('email-preview');
+    
+    if (template.trim()) {
+        // Replace placeholders with sample data for preview
+        let previewText = template;
+        
+        // Use sample data if available
+        if (Object.keys(sampleData).length > 0) {
+            columns.forEach(function(column) {
+                const placeholder = '{' + column + '}';
+                const value = sampleData[column] || '[' + column + ']';
+                // Use a simple replace for each placeholder
+                previewText = previewText.split(placeholder).join(value);
+            });
+        }
+        
+        // Convert line breaks to HTML for preview
+        previewText = previewText.replace(/\n/g, '<br>');
+        
+        preview.innerHTML = previewText || 'Email preview...';
+        preview.classList.add('has-content');
+    } else {
+        preview.innerHTML = '<div class="text-muted">Email preview will appear here as you type...</div>';
+        preview.classList.remove('has-content');
+    }
+}
+
+// Update preview as user types
+document.getElementById('template').addEventListener('input', updatePreview);
+
+// Initial preview update
+document.addEventListener('DOMContentLoaded', function() {
+    updatePreview();
+});
+
+// Preserve formatting when pasting
+document.getElementById('template').addEventListener('paste', function(e) {
+    // Allow default paste behavior to preserve formatting
+    setTimeout(updatePreview, 10);
+});
+
+// Handle tab key in textarea for better formatting
+document.getElementById('template').addEventListener('keydown', function(e) {
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        
+        // Insert tab character
+        this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
+        
+        // Move cursor after inserted tab
+        this.selectionStart = this.selectionEnd = start + 1;
+        
+        updatePreview();
+    }
+});
 </script>
 
 {% endblock %}
