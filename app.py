@@ -145,37 +145,32 @@ def format_email_content(content):
     # Escape HTML characters first
     content = html.escape(content)
     
-    # Handle different types of line breaks and spacing
-    # Replace single line breaks with <br> tags
-    content = content.replace('\r\n', '\n')  # Normalize Windows line endings
-    content = content.replace('\r', '\n')    # Normalize Mac line endings
+    # Normalize line endings
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
     
-    # Convert single line breaks to <br>, but preserve paragraph breaks
-    lines = content.split('\n')
-    formatted_lines = []
+    # Convert single line breaks to <br> and double line breaks to <br><br>
+    # First, replace double line breaks with a unique placeholder
+    content = content.replace('\n\n', '|||DOUBLE_BREAK|||')
     
-    for i, line in enumerate(lines):
-        # Preserve spaces at the beginning and end of lines
-        if line.strip() == '':  # Empty line
-            formatted_lines.append('<br>')
-        else:
-            # Convert multiple spaces to non-breaking spaces but preserve structure
-            line = line.replace('  ', '&nbsp;&nbsp;')
-            line = line.replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
-            formatted_lines.append(line)
+    # Then replace single line breaks with <br>
+    content = content.replace('\n', '<br>')
     
-    # Join lines with <br> tags
-    formatted_content = '<br>'.join(formatted_lines)
+    # Finally, replace the placeholder with double <br>
+    content = content.replace('|||DOUBLE_BREAK|||', '<br><br>')
+    
+    # Handle spacing
+    content = content.replace('  ', '&nbsp;&nbsp;')
+    content = content.replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
     
     # Wrap in a div with proper styling
     html_content = f'''
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
                 font-size: 14px; 
-                line-height: 1.4; 
+                line-height: 1.2; 
                 color: #333333;
                 margin: 0;
                 padding: 0;">
-        {formatted_content}
+        {content}
     </div>
     '''
     
