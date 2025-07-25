@@ -141,31 +141,45 @@ def read_file(filepath):
         return None
 
 def format_email_content(content):
-    """Convert plain text to HTML while preserving formatting"""
+    """Convert plain text to HTML while preserving formatting exactly as typed"""
     # Escape HTML characters first
     content = html.escape(content)
     
-    # Convert line breaks to HTML breaks
-    content = content.replace('\n', '<br>')
+    # Handle different types of line breaks and spacing
+    # Replace single line breaks with <br> tags
+    content = content.replace('\r\n', '\n')  # Normalize Windows line endings
+    content = content.replace('\r', '\n')    # Normalize Mac line endings
     
-    # Convert multiple spaces to non-breaking spaces (preserve spacing)
-    content = content.replace('  ', '&nbsp;&nbsp;')
+    # Convert single line breaks to <br>, but preserve paragraph breaks
+    lines = content.split('\n')
+    formatted_lines = []
     
-    # Convert tabs to spaces
-    content = content.replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
+    for i, line in enumerate(lines):
+        # Preserve spaces at the beginning and end of lines
+        if line.strip() == '':  # Empty line
+            formatted_lines.append('<br>')
+        else:
+            # Convert multiple spaces to non-breaking spaces but preserve structure
+            line = line.replace('  ', '&nbsp;&nbsp;')
+            line = line.replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
+            formatted_lines.append(line)
     
-    # Wrap in a div with proper styling to preserve formatting
-    formatted_content = f'''
+    # Join lines with <br> tags
+    formatted_content = '<br>'.join(formatted_lines)
+    
+    # Wrap in a div with proper styling
+    html_content = f'''
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
                 font-size: 14px; 
-                line-height: 1.5; 
-                white-space: pre-wrap; 
-                word-wrap: break-word;">
-        {content}
+                line-height: 1.4; 
+                color: #333333;
+                margin: 0;
+                padding: 0;">
+        {formatted_content}
     </div>
     '''
     
-    return formatted_content
+    return html_content
 
 def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recipient_email, subject, body):
     """Send individual email via SMTP"""
@@ -175,14 +189,14 @@ def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recip
         msg['To'] = recipient_email
         msg['Subject'] = subject
         
-        # Format the body to preserve formatting
-        formatted_body = format_email_content(body)
-        
-        # Create both plain text and HTML versions
+        # Create plain text version (keep original formatting)
         text_part = MIMEText(body, 'plain', 'utf-8')
+        
+        # Create HTML version with preserved formatting
+        formatted_body = format_email_content(body)
         html_part = MIMEText(formatted_body, 'html', 'utf-8')
         
-        # Attach parts to message
+        # Attach parts to message (order matters - plain text first, then HTML)
         msg.attach(text_part)
         msg.attach(html_part)
         
