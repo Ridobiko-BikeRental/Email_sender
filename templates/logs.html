@@ -17,6 +17,7 @@
                             <thead>
                                 <tr>
                                     <th>Date & Time</th>
+                                    <th>Sender Account</th>
                                     <th>Duration</th>
                                     <th>Total Emails</th>
                                     <th>Sent Successfully</th>
@@ -33,8 +34,13 @@
                                         {{ log.timestamp.split('T')[0] }}<br>
                                         <small class="text-muted">{{ log.timestamp.split('T')[1].split('.')[0] }}</small>
                                     </td>
+                                    <td>
+                                        <span class="badge bg-info">{{ log.sender_email if log.sender_email else 'Not specified' }}</span>
+                                    </td>
                                     <td>{{ "%.1f"|format(log.duration_seconds) }}s</td>
-                                    <td>{{ log.total_emails }}</td>
+                                    <td>
+                                        <span class="badge bg-primary">{{ log.total_emails }}</span>
+                                    </td>
                                     <td>
                                         <span class="badge bg-success">{{ log.sent_count }}</span>
                                     </td>
@@ -43,15 +49,20 @@
                                     </td>
                                     <td>
                                         {% if log.total_emails > 0 %}
-                                            {{ "%.1f"|format((log.sent_count / log.total_emails) * 100) }}%
+                                            <span class="badge {% if (log.sent_count / log.total_emails) * 100 >= 90 %}bg-success{% elif (log.sent_count / log.total_emails) * 100 >= 70 %}bg-warning{% else %}bg-danger{% endif %}">
+                                                {{ "%.1f"|format((log.sent_count / log.total_emails) * 100) }}%
+                                            </span>
                                         {% else %}
-                                            0%
+                                            <span class="badge bg-secondary">0%</span>
                                         {% endif %}
                                     </td>
-                                    <td>{{ log.subject[:50] }}{% if log.subject|length > 50 %}...{% endif %}</td>
                                     <td>
-                                        <button class="btn btn-sm btn-info" 
-                                                onclick="showLogDetails('{{ loop.index0 }}')">
+                                        <span class="text-truncate" style="max-width: 200px; display: inline-block;" title="{{ log.subject if log.subject else 'No subject' }}">
+                                            {{ log.subject if log.subject else 'No subject' }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <button class="btn btn-sm btn-outline-info" onclick="showLogDetails('{{ log.filename }}', {{ loop.index0 }})">
                                             <i class="fas fa-eye"></i> Details
                                         </button>
                                     </td>
@@ -62,7 +73,7 @@
                     </div>
                 {% else %}
                     <div class="alert alert-info">
-                        <i class="fas fa-info-circle"></i> No email logs found. Send some emails first!
+                        <i class="fas fa-info-circle"></i> No email sending logs found. Send some emails first!
                     </div>
                 {% endif %}
                 
@@ -76,65 +87,106 @@
     </div>
 </div>
 
-<!-- Modal for log details -->
+<!-- Log Details Modal -->
 <div class="modal fade" id="logDetailsModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Email Log Details</h5>
+                <h5 class="modal-title">Log Details</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body" id="logDetailsBody">
-                <!-- Content will be loaded here -->
+            <div class="modal-body" id="logDetailsContent">
+                <!-- Details will be loaded here -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-const logs = {{ logs | tojson }};
-
-function showLogDetails(index) {
+function showLogDetails(filename, index) {
+    const logs = {{ logs | tojson }};
     const log = logs[index];
-    let html = `
-        <h6>Session Summary</h6>
-        <table class="table table-sm">
-            <tr><td><strong>Date:</strong></td><td>${log.timestamp}</td></tr>
-            <tr><td><strong>Duration:</strong></td><td>${log.duration_seconds.toFixed(1)} seconds</td></tr>
-            <tr><td><strong>Sender:</strong></td><td>${log.sender_email}</td></tr>
-            <tr><td><strong>Subject:</strong></td><td>${log.subject}</td></tr>
-            <tr><td><strong>Total Emails:</strong></td><td>${log.total_emails}</td></tr>
-            <tr><td><strong>Sent Successfully:</strong></td><td><span class="badge bg-success">${log.sent_count}</span></td></tr>
-            <tr><td><strong>Failed:</strong></td><td><span class="badge bg-danger">${log.failed_count}</span></td></tr>
-        </table>
+    
+    let successEmailsList = '';
+    if (log.success_emails && log.success_emails.length > 0) {
+        successEmailsList = log.success_emails.slice(0, 10).map(email => 
+            `<li class="list-group-item d-flex justify-content-between align-items-center">
+                ${email}
+                <span class="badge bg-success rounded-pill">✓</span>
+            </li>`
+        ).join('');
+        if (log.success_emails.length > 10) {
+            successEmailsList += `<li class="list-group-item">... and ${log.success_emails.length - 10} more</li>`;
+        }
+    }
+    
+    let failedEmailsList = '';
+    if (log.failed_emails && log.failed_emails.length > 0) {
+        failedEmailsList = log.failed_emails.slice(0, 10).map(emailError => {
+            const [email, ...errorParts] = emailError.split(':');
+            const error = errorParts.join(':');
+            return `<li class="list-group-item">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <strong>${email}</strong><br>
+                        <small class="text-danger">${error}</small>
+                    </div>
+                    <span class="badge bg-danger rounded-pill">✗</span>
+                </div>
+            </li>`;
+        }).join('');
+        if (log.failed_emails.length > 10) {
+            failedEmailsList += `<li class="list-group-item">... and ${log.failed_emails.length - 10} more failures</li>`;
+        }
+    }
+    
+    const content = `
+        <div class="row">
+            <div class="col-md-6">
+                <h6><i class="fas fa-info-circle"></i> Session Information</h6>
+                <table class="table table-sm">
+                    <tr><td><strong>Sender Account:</strong></td><td>${log.sender_email || 'Not specified'}</td></tr>
+                    <tr><td><strong>Date:</strong></td><td>${log.timestamp.split('T')[0]}</td></tr>
+                    <tr><td><strong>Time:</strong></td><td>${log.timestamp.split('T')[1].split('.')[0]}</td></tr>
+                    <tr><td><strong>Duration:</strong></td><td>${log.duration_seconds.toFixed(1)} seconds</td></tr>
+                    <tr><td><strong>Subject:</strong></td><td>${log.subject || 'No subject'}</td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h6><i class="fas fa-chart-pie"></i> Statistics</h6>
+                <table class="table table-sm">
+                    <tr><td><strong>Total Emails:</strong></td><td><span class="badge bg-primary">${log.total_emails}</span></td></tr>
+                    <tr><td><strong>Successfully Sent:</strong></td><td><span class="badge bg-success">${log.sent_count}</span></td></tr>
+                    <tr><td><strong>Failed:</strong></td><td><span class="badge bg-danger">${log.failed_count}</span></td></tr>
+                    <tr><td><strong>Success Rate:</strong></td><td><span class="badge bg-info">${log.total_emails > 0 ? ((log.sent_count / log.total_emails) * 100).toFixed(1) : 0}%</span></td></tr>
+                </table>
+            </div>
+        </div>
+        
+        ${successEmailsList ? `
+        <div class="mt-4">
+            <h6><i class="fas fa-check-circle text-success"></i> Successfully Sent Emails</h6>
+            <ul class="list-group" style="max-height: 200px; overflow-y: auto;">
+                ${successEmailsList}
+            </ul>
+        </div>
+        ` : ''}
+        
+        ${failedEmailsList ? `
+        <div class="mt-4">
+            <h6><i class="fas fa-exclamation-triangle text-danger"></i> Failed Emails</h6>
+            <ul class="list-group" style="max-height: 200px; overflow-y: auto;">
+                ${failedEmailsList}
+            </ul>
+        </div>
+        ` : ''}
     `;
     
-    if (log.success_emails && log.success_emails.length > 0) {
-        html += `
-            <h6 class="mt-4">Successfully Sent To:</h6>
-            <div style="max-height: 200px; overflow-y: auto;">
-                <ul class="list-group list-group-flush">
-        `;
-        log.success_emails.forEach(email => {
-            html += `<li class="list-group-item">${email}</li>`;
-        });
-        html += `</ul></div>`;
-    }
-    
-    if (log.failed_emails && log.failed_emails.length > 0) {
-        html += `
-            <h6 class="mt-4">Failed Emails:</h6>
-            <div style="max-height: 200px; overflow-y: auto;">
-                <ul class="list-group list-group-flush">
-        `;
-        log.failed_emails.forEach(failedEmail => {
-            const [email, error] = failedEmail.split(': ');
-            html += `<li class="list-group-item"><strong>${email}</strong><br><small class="text-muted">${error}</small></li>`;
-        });
-        html += `</ul></div>`;
-    }
-    
-    document.getElementById('logDetailsBody').innerHTML = html;
+    document.getElementById('logDetailsContent').innerHTML = content;
     new bootstrap.Modal(document.getElementById('logDetailsModal')).show();
 }
 </script>

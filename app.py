@@ -25,9 +25,9 @@ ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
 LOGS_FOLDER = 'logs'
 
-# Email configuration from environment variables
-DEFAULT_SENDER_EMAIL = os.getenv('SENDER_EMAIL')
-DEFAULT_SENDER_PASSWORD = os.getenv('SENDER_APP_PASSWORD')
+# Email configuration from environment variables (optional defaults)
+DEFAULT_SENDER_EMAIL = os.getenv('SENDER_EMAIL', '')
+DEFAULT_SENDER_PASSWORD = os.getenv('SENDER_APP_PASSWORD', '')
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
@@ -56,6 +56,7 @@ email_status = {
     'sent_count': 0,
     'failed_count': 0,
     'current_email': '',
+    'sender_email': '',
     'start_time': None,
     'failed_emails': [],
     'success_emails': []
@@ -173,6 +174,7 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
         'sent_count': 0,
         'failed_count': 0,
         'current_email': '',
+        'sender_email': sender_email,
         'start_time': datetime.now(),
         'failed_emails': [],
         'success_emails': []
@@ -191,7 +193,7 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
     valid_emails = [row for row in df.data if row.get(email_column, '').strip()]
     email_status['total_emails'] = len(valid_emails)
     
-    logger.info(f"Starting bulk email sending to {email_status['total_emails']} recipients")
+    logger.info(f"Starting bulk email sending to {email_status['total_emails']} recipients from {sender_email}")
     
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
@@ -284,8 +286,7 @@ def upload_file():
                                  filename=filename, 
                                  columns=columns,
                                  sample_data=sample_data,
-                                 default_sender_email=DEFAULT_SENDER_EMAIL,
-                                 has_default_credentials=bool(DEFAULT_SENDER_EMAIL and DEFAULT_SENDER_PASSWORD))
+                                 default_sender_email=DEFAULT_SENDER_EMAIL)
         else:
             flash('Failed to read the uploaded file')
             return redirect(url_for('index'))
@@ -296,21 +297,22 @@ def upload_file():
 @app.route('/send_emails', methods=['POST'])
 def send_emails():
     filename = request.form.get('filename')
-    # Only use environment variables, no user input for credentials
-    sender_email = DEFAULT_SENDER_EMAIL
-    sender_password = DEFAULT_SENDER_PASSWORD
+    # Get sender credentials from form
+    sender_email = request.form.get('sender_email', '').strip()
+    sender_password = request.form.get('sender_password', '').strip()
     subject = request.form.get('subject')
     template = request.form.get('template')
     email_column = request.form.get('email_column')
     delay = int(request.form.get('delay', 1))
     
-    # Check if environment variables are configured
-    if not sender_email or not sender_password:
-        flash('Email credentials not configured. Please contact administrator.')
+    # Validate all required fields
+    if not all([filename, sender_email, sender_password, subject, template, email_column]):
+        flash('All fields including sender email and password are required.')
         return redirect(url_for('index'))
     
-    if not all([filename, subject, template, email_column]):
-        flash('All fields are required.')
+    # Basic email validation
+    if '@' not in sender_email or '.' not in sender_email:
+        flash('Please enter a valid sender email address.')
         return redirect(url_for('index'))
     
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)

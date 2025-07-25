@@ -11,8 +11,14 @@
                 </a>
             </div>
             <div class="card-body">
+                {% if status.sender_email %}
+                <div class="alert alert-info mb-3">
+                    <strong><i class="fas fa-user"></i> Sender Account:</strong> {{ status.sender_email }}
+                </div>
+                {% endif %}
+
                 {% if status.is_sending %}
-                    <div class="alert alert-info">
+                    <div class="alert alert-warning">
                         <strong><i class="fas fa-spinner fa-spin"></i> Sending emails in progress...</strong>
                     </div>
                     
@@ -50,8 +56,8 @@
                             <div class="card bg-info text-white">
                                 <div class="card-body text-center">
                                     <h4 id="progress-percent">
-                                        {% if status.total_emails > 0 %}
-                                            {{ ((status.sent_count + status.failed_count) / status.total_emails * 100) | round(1) }}%
+                                        {% if status.total_emails and status.total_emails > 0 %}
+                                            {{ (((status.sent_count or 0) + (status.failed_count or 0)) / status.total_emails * 100) | round(1) }}%
                                         {% else %}
                                             0%
                                         {% endif %}
@@ -64,8 +70,8 @@
                     
                     <div class="mt-4">
                         <div class="progress">
-                            <div class="progress-bar" role="progressbar" 
-                                 style="width: {% if status.total_emails > 0 %}{{ ((status.sent_count + status.failed_count) / status.total_emails * 100) }}%{% else %}0%{% endif %}"
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" 
+                                 style="width: {% if status.total_emails and status.total_emails > 0 %}{{ (((status.sent_count or 0) + (status.failed_count or 0)) / status.total_emails * 100) }}%{% else %}0%{% endif %}"
                                  id="progress-bar">
                             </div>
                         </div>
@@ -156,8 +162,8 @@ setInterval(function() {
             document.getElementById('sent-count').textContent = data.sent_count;
             document.getElementById('failed-count').textContent = data.failed_count;
             
-            if (data.total_emails > 0) {
-                const progress = ((data.sent_count + data.failed_count) / data.total_emails * 100);
+            if (data.total_emails && data.total_emails > 0) {
+                const progress = (((data.sent_count || 0) + (data.failed_count || 0)) / data.total_emails * 100);
                 document.getElementById('progress-percent').textContent = progress.toFixed(1) + '%';
                 document.getElementById('progress-bar').style.width = progress + '%';
             }
