@@ -25,10 +25,25 @@ UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
 LOGS_FOLDER = 'logs'
+EMAIL_LIMIT_PER_ACCOUNT = 15  # Limit per account
 
-# Email configuration from environment variables (optional defaults)
-DEFAULT_SENDER_EMAIL = os.getenv('SENDER_EMAIL', '')
-DEFAULT_SENDER_PASSWORD = os.getenv('SENDER_APP_PASSWORD', '')
+# Load multiple email configurations from environment
+def load_email_accounts():
+    """Load all email accounts from environment variables"""
+    email_accounts = {}
+    for i in range(1, 11):  # Support up to 10 accounts
+        email = os.getenv(f'SENDER_EMAIL_{i}')
+        password = os.getenv(f'SENDER_APP_PASSWORD_{i}')
+        if email and password:
+            email_accounts[email] = {
+                'password': password,
+                'sent_count': 0,  # Track emails sent from this account
+                'last_reset': datetime.now().date()  # Track when count was last reset
+            }
+    return email_accounts
+
+# Global email accounts configuration
+EMAIL_ACCOUNTS = load_email_accounts()
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
@@ -57,7 +72,8 @@ email_status = {
     'sent_count': 0,
     'failed_count': 0,
     'current_email': '',
-    'sender_email': '',
+    'current_sender': '',
+    'sender_rotation': {},  # Track which sender is being used
     'start_time': None,
     'failed_emails': [],
     'success_emails': []
@@ -87,6 +103,48 @@ class SimpleDataFrame:
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def reset_daily_counts():
+    """Reset email counts daily"""
+    global EMAIL_ACCOUNTS
+    today = datetime.now().date()
+    
+    for email, account_info in EMAIL_ACCOUNTS.items():
+        if account_info['last_reset'] < today:
+            account_info['sent_count'] = 0
+            account_info['last_reset'] = today
+            logger.info(f"Reset email count for {email}")
+
+def get_available_sender():
+    """Get next available sender account that hasn't reached the limit"""
+    reset_daily_counts()  # Reset counts if it's a new day
+    
+    for email, account_info in EMAIL_ACCOUNTS.items():
+        if account_info['sent_count'] < EMAIL_LIMIT_PER_ACCOUNT:
+            return email, account_info['password']
+    
+    # If all accounts have reached the limit, return the first one with a warning
+    if EMAIL_ACCOUNTS:
+        first_email = list(EMAIL_ACCOUNTS.keys())[0]
+        logger.warning(f"All accounts have reached daily limit. Using {first_email}")
+        return first_email, EMAIL_ACCOUNTS[first_email]['password']
+    
+    return None, None
+
+def get_account_stats():
+    """Get statistics for all email accounts"""
+    reset_daily_counts()
+    stats = []
+    for email, account_info in EMAIL_ACCOUNTS.items():
+        remaining = EMAIL_LIMIT_PER_ACCOUNT - account_info['sent_count']
+        stats.append({
+            'email': email,
+            'sent_today': account_info['sent_count'],
+            'remaining': remaining,
+            'limit': EMAIL_LIMIT_PER_ACCOUNT,
+            'percentage_used': (account_info['sent_count'] / EMAIL_LIMIT_PER_ACCOUNT) * 100
+        })
+    return stats
 
 def read_csv_file(filepath):
     """Read CSV file"""
@@ -202,16 +260,24 @@ def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recip
         server.sendmail(sender_email, recipient_email, text)
         server.quit()
         
-        logger.info(f"Email sent successfully to {recipient_email}")
+        # Update the account's sent count
+        if sender_email in EMAIL_ACCOUNTS:
+            EMAIL_ACCOUNTS[sender_email]['sent_count'] += 1
+        
+        logger.info(f"Email sent successfully to {recipient_email} from {sender_email}")
         return True, "Email sent successfully"
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"Failed to send email to {recipient_email}: {error_msg}")
+        logger.error(f"Failed to send email to {recipient_email} from {sender_email}: {error_msg}")
         return False, error_msg
 
-def send_bulk_emails(file_path, sender_email, sender_password, subject, template, email_column, delay=1):
-    """Send bulk emails in background"""
+def send_bulk_emails(file_path, subject, template, email_column, delay=1):
+    """Send bulk emails in background with automatic sender rotation"""
     global email_status
+    
+    # Check if we have any email accounts configured
+    if not EMAIL_ACCOUNTS:
+        return False, "No email accounts configured in environment variables"
     
     # Reset status
     email_status.update({
@@ -220,7 +286,8 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
         'sent_count': 0,
         'failed_count': 0,
         'current_email': '',
-        'sender_email': sender_email,
+        'current_sender': '',
+        'sender_rotation': {},
         'start_time': datetime.now(),
         'failed_emails': [],
         'success_emails': []
@@ -239,14 +306,33 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
     valid_emails = [row for row in df.data if row.get(email_column, '').strip()]
     email_status['total_emails'] = len(valid_emails)
     
-    logger.info(f"Starting bulk email sending to {email_status['total_emails']} recipients from {sender_email}")
+    logger.info(f"Starting bulk email sending to {email_status['total_emails']} recipients")
     
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
     
+    current_sender = None
+    current_password = None
+    emails_sent_with_current = 0
+    
     for index, row in enumerate(valid_emails):
-        email = row.get(email_column, '').strip()
-        email_status['current_email'] = email
+        recipient_email = row.get(email_column, '').strip()
+        email_status['current_email'] = recipient_email
+        
+        # Get next available sender if current one reached limit or is None
+        if (current_sender is None or 
+            emails_sent_with_current >= EMAIL_LIMIT_PER_ACCOUNT or
+            (current_sender in EMAIL_ACCOUNTS and 
+             EMAIL_ACCOUNTS[current_sender]['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT)):
+            
+            current_sender, current_password = get_available_sender()
+            emails_sent_with_current = 0
+            
+            if current_sender is None:
+                logger.error("No available sender accounts")
+                break
+        
+        email_status['current_sender'] = current_sender
         
         # Replace placeholders in template with row data
         personalized_message = template
@@ -257,16 +343,22 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
                 personalized_message = personalized_message.replace(placeholder, str(value))
         
         success, error_msg = send_email_smtp(
-            smtp_server, smtp_port, sender_email, sender_password,
-            email, subject, personalized_message
+            smtp_server, smtp_port, current_sender, current_password,
+            recipient_email, subject, personalized_message
         )
         
         if success:
             email_status['sent_count'] += 1
-            email_status['success_emails'].append(email)
+            email_status['success_emails'].append(recipient_email)
+            emails_sent_with_current += 1
+            
+            # Track which sender sent to which recipients
+            if current_sender not in email_status['sender_rotation']:
+                email_status['sender_rotation'][current_sender] = 0
+            email_status['sender_rotation'][current_sender] += 1
         else:
             email_status['failed_count'] += 1
-            email_status['failed_emails'].append(f"{email}: {error_msg}")
+            email_status['failed_emails'].append(f"{recipient_email}: {error_msg}")
         
         # Add delay between emails to avoid being flagged as spam
         time.sleep(delay)
@@ -286,7 +378,8 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
         'success_emails': email_status['success_emails'],
         'failed_emails': email_status['failed_emails'],
         'subject': subject,
-        'sender_email': sender_email
+        'sender_rotation': email_status['sender_rotation'],
+        'account_stats': get_account_stats()
     }
     
     log_filename = f"bulk_email_log_{end_time.strftime('%Y%m%d_%H%M%S')}.json"
@@ -300,7 +393,8 @@ def send_bulk_emails(file_path, sender_email, sender_password, subject, template
         'failed_count': email_status['failed_count'],
         'failed_emails': email_status['failed_emails'],
         'duration': str(duration),
-        'log_file': log_filename
+        'log_file': log_filename,
+        'sender_rotation': email_status['sender_rotation']
     }
 
 @app.route('/')
@@ -328,11 +422,14 @@ def upload_file():
         if df is not None:
             columns = list(df.columns)
             sample_data = df.head().to_dict('records')
+            account_stats = get_account_stats()
+            
             return render_template('compose.html', 
                                  filename=filename, 
                                  columns=columns,
                                  sample_data=sample_data,
-                                 default_sender_email=DEFAULT_SENDER_EMAIL)
+                                 email_accounts=EMAIL_ACCOUNTS,
+                                 account_stats=account_stats)
         else:
             flash('Failed to read the uploaded file')
             return redirect(url_for('index'))
@@ -343,22 +440,18 @@ def upload_file():
 @app.route('/send_emails', methods=['POST'])
 def send_emails():
     filename = request.form.get('filename')
-    # Get sender credentials from form
-    sender_email = request.form.get('sender_email', '').strip()
-    sender_password = request.form.get('sender_password', '').strip()
     subject = request.form.get('subject')
     template = request.form.get('template')
     email_column = request.form.get('email_column')
     delay = int(request.form.get('delay', 1))
     
     # Validate all required fields
-    if not all([filename, sender_email, sender_password, subject, template, email_column]):
-        flash('All fields including sender email and password are required.')
+    if not all([filename, subject, template, email_column]):
+        flash('All fields are required.')
         return redirect(url_for('index'))
     
-    # Basic email validation
-    if '@' not in sender_email or '.' not in sender_email:
-        flash('Please enter a valid sender email address.')
+    if not EMAIL_ACCOUNTS:
+        flash('No email accounts configured. Please contact administrator.')
         return redirect(url_for('index'))
     
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -366,12 +459,14 @@ def send_emails():
     # Start sending emails in background thread
     def send_emails_task():
         success, result = send_bulk_emails(
-            filepath, sender_email, sender_password, 
-            subject, template, email_column, delay
+            filepath, subject, template, email_column, delay
         )
         
         if success:
             flash(f"Bulk email sending completed! {result['success_count']} sent, {result['failed_count']} failed in {result['duration']}")
+            if result['sender_rotation']:
+                rotation_info = ", ".join([f"{email}: {count}" for email, count in result['sender_rotation'].items()])
+                flash(f"Sender distribution: {rotation_info}")
             if result['failed_emails']:
                 flash(f"Failed emails: {', '.join(result['failed_emails'][:5])}")  # Show first 5 failures
         else:
@@ -387,12 +482,21 @@ def send_emails():
 @app.route('/status')
 def status():
     """Display real-time email sending status"""
-    return render_template('status.html', status=email_status)
+    account_stats = get_account_stats()
+    return render_template('status.html', status=email_status, account_stats=account_stats)
 
 @app.route('/api/status')
 def api_status():
     """API endpoint for real-time status updates"""
-    return jsonify(email_status)
+    status_data = email_status.copy()
+    status_data['account_stats'] = get_account_stats()
+    return jsonify(status_data)
+
+@app.route('/accounts')
+def accounts():
+    """Display account statistics"""
+    account_stats = get_account_stats()
+    return render_template('accounts.html', account_stats=account_stats)
 
 @app.route('/logs')
 def logs():

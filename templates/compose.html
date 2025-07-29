@@ -11,30 +11,44 @@
                 <form action="{{ url_for('send_emails') }}" method="post">
                     <input type="hidden" name="filename" value="{{ filename }}">
                     
-                    <!-- Sender Email Configuration -->
+                    <!-- Account Status -->
                     <div class="card mb-4">
-                        <div class="card-header bg-primary text-white">
-                            <h5 class="mb-0"><i class="fas fa-user"></i> Sender Configuration</h5>
+                        <div class="card-header bg-info text-white">
+                            <h5 class="mb-0"><i class="fas fa-users"></i> Email Account Status</h5>
                         </div>
                         <div class="card-body">
-                            <div class="row">
-                                <div class="col-md-12 mb-3">
-                                    <label for="sender_email" class="form-label">Sender Email Address:</label>
-                                    <input type="email" class="form-control" id="sender_email" name="sender_email" 
-                                           value="{{ default_sender_email }}" required 
-                                           placeholder="your-email@gmail.com">
-                                    <div class="form-text">The email address that will send the bulk emails</div>
-                                </div>
-                                <div class="col-md-12 mb-3">
-                                    <label for="sender_password" class="form-label">App Password:</label>
-                                    <input type="password" class="form-control" id="sender_password" name="sender_password" required 
-                                           placeholder="Enter your Gmail app password">
-                                    <div class="form-text">
-                                        <strong>For Gmail:</strong> Use an App Password, not your regular password. 
-                                        <a href="https://support.google.com/accounts/answer/185833" target="_blank">How to create App Password</a>
+                            {% if account_stats %}
+                                <div class="row">
+                                    {% for account in account_stats %}
+                                    <div class="col-md-6 mb-3">
+                                        <div class="card">
+                                            <div class="card-body">
+                                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                                    <h6 class="card-title mb-0">{{ account.email }}</h6>
+                                                    <span class="badge {% if account.remaining > 5 %}bg-success{% elif account.remaining > 0 %}bg-warning{% else %}bg-danger{% endif %}">
+                                                        {{ account.remaining }}/{{ account.limit }} remaining
+                                                    </span>
+                                                </div>
+                                                <div class="progress" style="height: 8px;">
+                                                    <div class="progress-bar {% if account.percentage_used < 70 %}bg-success{% elif account.percentage_used < 90 %}bg-warning{% else %}bg-danger{% endif %}" 
+                                                         style="width: {{ account.percentage_used }}%"></div>
+                                                </div>
+                                                <small class="text-muted">{{ account.sent_today }} emails sent today</small>
+                                            </div>
+                                        </div>
                                     </div>
+                                    {% endfor %}
                                 </div>
-                            </div>
+                                <div class="alert alert-info mb-0">
+                                    <i class="fas fa-info-circle"></i> 
+                                    <strong>Auto-rotation:</strong> Emails will be automatically distributed across available accounts. Each account has a daily limit of 15 emails.
+                                </div>
+                            {% else %}
+                                <div class="alert alert-danger">
+                                    <i class="fas fa-exclamation-triangle"></i> 
+                                    <strong>No email accounts configured!</strong> Please contact administrator to configure sender accounts.
+                                </div>
+                            {% endif %}
                         </div>
                     </div>
 
@@ -101,9 +115,15 @@ Your Team 😊"></textarea>
                         </div>
                     </div>
 
+                    {% if account_stats %}
                     <button type="submit" class="btn btn-success btn-lg">
                         <i class="fas fa-paper-plane"></i> Send Bulk Emails
                     </button>
+                    {% else %}
+                    <button type="button" class="btn btn-secondary btn-lg" disabled>
+                        <i class="fas fa-times"></i> No Email Accounts Available
+                    </button>
+                    {% endif %}
                 </form>
             </div>
         </div>
@@ -161,23 +181,10 @@ Your Team 😊"></textarea>
                     <li><i class="fas fa-check text-success"></i> Use placeholders like <code>{Name}</code> for personalization</li>
                     <li><i class="fas fa-check text-success"></i> Formatting (spaces, line breaks, bullets) is preserved</li>
                     <li><i class="fas fa-check text-success"></i> Emojis are fully supported 😊</li>
-                    <li><i class="fas fa-check text-success"></i> Use Gmail App Password for security</li>
-                    <li><i class="fas fa-check text-success"></i> Test with a small file first</li>
+                    <li><i class="fas fa-check text-success"></i> Emails auto-rotate across configured accounts</li>
+                    <li><i class="fas fa-check text-success"></i> 15 email limit per account per day</li>
                     <li><i class="fas fa-check text-success"></i> Check spam folder if emails don't arrive</li>
                 </ul>
-            </div>
-        </div>
-
-        <div class="card mt-3">
-            <div class="card-header">
-                <h5><i class="fas fa-shield-alt"></i> Security Note</h5>
-            </div>
-            <div class="card-body">
-                <div class="alert alert-warning mb-0">
-                    <small>
-                        <strong>Important:</strong> Your email credentials are only used for sending emails and are not stored on our servers.
-                    </small>
-                </div>
             </div>
         </div>
     </div>
@@ -259,8 +266,8 @@ Your Team 😊"></textarea>
 
 <script>
 // Define columns and sample data globally
-const columns = {{ columns | tojson | safe }};
-const sampleData = {% if sample_data and sample_data|length > 0 %}{{ sample_data[0] | tojson | safe }}{% else %}{}{% endif %};
+const columns = {{ columns | tojson }};
+const sampleData = {% if sample_data and sample_data|length > 0 %}{{ sample_data[0] | tojson }}{% else %}{}{% endif %};
 
 function insertPlaceholder(columnName) {
     const textarea = document.getElementById('template');
