@@ -397,6 +397,121 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
         'sender_rotation': email_status['sender_rotation']
     }
 
+def send_bulk_emails_single_sender(file_path, sender_email, subject, template, email_column, delay=1):
+    """Send bulk emails using a single specific sender"""
+    global email_status
+    
+    # Check if sender exists and has quota
+    if sender_email not in EMAIL_ACCOUNTS:
+        return False, "Selected sender account not found"
+    
+    reset_daily_counts()
+    if EMAIL_ACCOUNTS[sender_email]['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
+        return False, f"Selected account has reached daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails"
+    
+    # Reset status
+    email_status.update({
+        'is_sending': True,
+        'total_emails': 0,
+        'sent_count': 0,
+        'failed_count': 0,
+        'current_email': '',
+        'current_sender': sender_email,
+        'sender_rotation': {sender_email: 0},
+        'start_time': datetime.now(),
+        'failed_emails': [],
+        'success_emails': []
+    })
+    
+    df = read_file(file_path)
+    if df is None:
+        email_status['is_sending'] = False
+        return False, "Failed to read file"
+    
+    if email_column not in df.columns:
+        email_status['is_sending'] = False
+        return False, f"Column '{email_column}' not found in file"
+    
+    # Filter out empty emails and count total
+    valid_emails = [row for row in df.data if row.get(email_column, '').strip()]
+    email_status['total_emails'] = len(valid_emails)
+    
+    # Check if we can send all emails with this account
+    remaining_quota = EMAIL_LIMIT_PER_ACCOUNT - EMAIL_ACCOUNTS[sender_email]['sent_count']
+    if len(valid_emails) > remaining_quota:
+        email_status['is_sending'] = False
+        return False, f"Cannot send {len(valid_emails)} emails. Account {sender_email} has only {remaining_quota} emails remaining today."
+    
+    logger.info(f"Starting bulk email sending to {email_status['total_emails']} recipients from {sender_email}")
+    
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    sender_password = EMAIL_ACCOUNTS[sender_email]['password']
+    
+    for index, row in enumerate(valid_emails):
+        recipient_email = row.get(email_column, '').strip()
+        email_status['current_email'] = recipient_email
+        
+        # Replace placeholders in template with row data
+        personalized_message = template
+        for col in df.columns:
+            placeholder = f"{{{col}}}"
+            if placeholder in personalized_message:
+                value = row.get(col, "")
+                personalized_message = personalized_message.replace(placeholder, str(value))
+        
+        success, error_msg = send_email_smtp(
+            smtp_server, smtp_port, sender_email, sender_password,
+            recipient_email, subject, personalized_message
+        )
+        
+        if success:
+            email_status['sent_count'] += 1
+            email_status['success_emails'].append(recipient_email)
+            email_status['sender_rotation'][sender_email] += 1
+        else:
+            email_status['failed_count'] += 1
+            email_status['failed_emails'].append(f"{recipient_email}: {error_msg}")
+        
+        # Add delay between emails to avoid being flagged as spam
+        time.sleep(delay)
+    
+    # Email sending completed
+    email_status['is_sending'] = False
+    end_time = datetime.now()
+    duration = end_time - email_status['start_time']
+    
+    # Save detailed log to file
+    log_data = {
+        'timestamp': end_time.isoformat(),
+        'duration_seconds': duration.total_seconds(),
+        'total_emails': email_status['total_emails'],
+        'sent_count': email_status['sent_count'],
+        'failed_count': email_status['failed_count'],
+        'success_emails': email_status['success_emails'],
+        'failed_emails': email_status['failed_emails'],
+        'subject': subject,
+        'sender_email': sender_email,
+        'sender_mode': 'manual',
+        'sender_rotation': email_status['sender_rotation'],
+        'account_stats': get_account_stats()
+    }
+    
+    log_filename = f"bulk_email_log_{end_time.strftime('%Y%m%d_%H%M%S')}.json"
+    with open(os.path.join(LOGS_FOLDER, log_filename), 'w') as f:
+        json.dump(log_data, f, indent=2)
+    
+    logger.info(f"Bulk email sending completed from {sender_email}. {email_status['sent_count']} sent, {email_status['failed_count']} failed. Duration: {duration}")
+    
+    return True, {
+        'success_count': email_status['sent_count'],
+        'failed_count': email_status['failed_count'],
+        'failed_emails': email_status['failed_emails'],
+        'duration': str(duration),
+        'log_file': log_filename,
+        'sender_rotation': email_status['sender_rotation']
+    }
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -440,31 +555,51 @@ def upload_file():
 @app.route('/send_emails', methods=['POST'])
 def send_emails():
     filename = request.form.get('filename')
+    sender_mode = request.form.get('sender_mode')
+    selected_sender = request.form.get('selected_sender')
     subject = request.form.get('subject')
     template = request.form.get('template')
     email_column = request.form.get('email_column')
     delay = int(request.form.get('delay', 1))
     
     # Validate all required fields
-    if not all([filename, subject, template, email_column]):
+    if not all([filename, sender_mode, subject, template, email_column]):
         flash('All fields are required.')
+        return redirect(url_for('index'))
+    
+    # Validate sender selection for manual mode
+    if sender_mode == 'manual' and not selected_sender:
+        flash('Please select an email account for manual mode.')
         return redirect(url_for('index'))
     
     if not EMAIL_ACCOUNTS:
         flash('No email accounts configured. Please contact administrator.')
         return redirect(url_for('index'))
     
+    # Check if selected sender has remaining quota
+    if sender_mode == 'manual':
+        reset_daily_counts()  # Ensure counts are up to date
+        if (selected_sender in EMAIL_ACCOUNTS and 
+            EMAIL_ACCOUNTS[selected_sender]['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT):
+            flash(f'Selected account {selected_sender} has reached its daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails.')
+            return redirect(url_for('index'))
+    
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     
     # Start sending emails in background thread
     def send_emails_task():
-        success, result = send_bulk_emails(
-            filepath, subject, template, email_column, delay
-        )
+        if sender_mode == 'auto':
+            success, result = send_bulk_emails(
+                filepath, subject, template, email_column, delay
+            )
+        else:  # manual mode
+            success, result = send_bulk_emails_single_sender(
+                filepath, selected_sender, subject, template, email_column, delay
+            )
         
         if success:
             flash(f"Bulk email sending completed! {result['success_count']} sent, {result['failed_count']} failed in {result['duration']}")
-            if result['sender_rotation']:
+            if result.get('sender_rotation'):
                 rotation_info = ", ".join([f"{email}: {count}" for email, count in result['sender_rotation'].items()])
                 flash(f"Sender distribution: {rotation_info}")
             if result['failed_emails']:

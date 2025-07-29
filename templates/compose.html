@@ -11,6 +11,44 @@
                 <form action="{{ url_for('send_emails') }}" method="post">
                     <input type="hidden" name="filename" value="{{ filename }}">
                     
+                    <!-- Sender Selection -->
+                    <div class="card mb-4">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="mb-0"><i class="fas fa-user"></i> Sender Selection</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label for="sender_mode" class="form-label">Sending Mode:</label>
+                                <select class="form-select" id="sender_mode" name="sender_mode" required onchange="toggleSenderOptions()">
+                                    <option value="">Select sending mode</option>
+                                    <option value="auto" selected>Auto-rotate (Recommended)</option>
+                                    <option value="manual">Select specific account</option>
+                                </select>
+                                <div class="form-text">Auto-rotate distributes emails across all available accounts automatically</div>
+                            </div>
+
+                            <div id="manual-sender-section" style="display: none;">
+                                <div class="mb-3">
+                                    <label for="selected_sender" class="form-label">Select Email Account:</label>
+                                    <select class="form-select" id="selected_sender" name="selected_sender">
+                                        <option value="">Choose an email account</option>
+                                        {% for account in account_stats %}
+                                        <option value="{{ account.email }}" 
+                                                {% if account.remaining == 0 %}disabled{% endif %}
+                                                data-remaining="{{ account.remaining }}"
+                                                data-sent="{{ account.sent_today }}">
+                                            {{ account.email }} 
+                                            ({{ account.remaining }}/{{ account.limit }} remaining)
+                                            {% if account.remaining == 0 %} - LIMIT REACHED{% endif %}
+                                        </option>
+                                        {% endfor %}
+                                    </select>
+                                    <div class="form-text">Select a specific account to send all emails from</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Account Status -->
                     <div class="card mb-4">
                         <div class="card-header bg-info text-white">
@@ -41,7 +79,7 @@
                                 </div>
                                 <div class="alert alert-info mb-0">
                                     <i class="fas fa-info-circle"></i> 
-                                    <strong>Auto-rotation:</strong> Emails will be automatically distributed across available accounts. Each account has a daily limit of 15 emails.
+                                    <strong>Daily Limits:</strong> Each account has a daily limit of 15 emails. Choose auto-rotate for best distribution or select a specific account.
                                 </div>
                             {% else %}
                                 <div class="alert alert-danger">
@@ -116,7 +154,7 @@ Your Team 😊"></textarea>
                     </div>
 
                     {% if account_stats %}
-                    <button type="submit" class="btn btn-success btn-lg">
+                    <button type="submit" class="btn btn-success btn-lg" id="sendButton">
                         <i class="fas fa-paper-plane"></i> Send Bulk Emails
                     </button>
                     {% else %}
@@ -181,7 +219,7 @@ Your Team 😊"></textarea>
                     <li><i class="fas fa-check text-success"></i> Use placeholders like <code>{Name}</code> for personalization</li>
                     <li><i class="fas fa-check text-success"></i> Formatting (spaces, line breaks, bullets) is preserved</li>
                     <li><i class="fas fa-check text-success"></i> Emojis are fully supported 😊</li>
-                    <li><i class="fas fa-check text-success"></i> Emails auto-rotate across configured accounts</li>
+                    <li><i class="fas fa-check text-success"></i> Auto-rotate for optimal distribution</li>
                     <li><i class="fas fa-check text-success"></i> 15 email limit per account per day</li>
                     <li><i class="fas fa-check text-success"></i> Check spam folder if emails don't arrive</li>
                 </ul>
@@ -269,6 +307,48 @@ Your Team 😊"></textarea>
 const columns = {{ columns | tojson }};
 const sampleData = {% if sample_data and sample_data|length > 0 %}{{ sample_data[0] | tojson }}{% else %}{}{% endif %};
 
+function toggleSenderOptions() {
+    const senderMode = document.getElementById('sender_mode').value;
+    const manualSection = document.getElementById('manual-sender-section');
+    const selectedSender = document.getElementById('selected_sender');
+    
+    if (senderMode === 'manual') {
+        manualSection.style.display = 'block';
+        selectedSender.setAttribute('required', 'required');
+    } else {
+        manualSection.style.display = 'none';
+        selectedSender.removeAttribute('required');
+        selectedSender.value = '';
+    }
+    
+    validateForm();
+}
+
+function validateForm() {
+    const senderMode = document.getElementById('sender_mode').value;
+    const selectedSender = document.getElementById('selected_sender').value;
+    const sendButton = document.getElementById('sendButton');
+    
+    if (senderMode === 'manual' && !selectedSender) {
+        sendButton.disabled = true;
+        sendButton.innerHTML = '<i class="fas fa-times"></i> Select Email Account';
+    } else if (senderMode === 'manual') {
+        const option = document.querySelector(`#selected_sender option[value="${selectedSender}"]`);
+        const remaining = option ? option.getAttribute('data-remaining') : 0;
+        
+        if (remaining == 0) {
+            sendButton.disabled = true;
+            sendButton.innerHTML = '<i class="fas fa-times"></i> Account Limit Reached';
+        } else {
+            sendButton.disabled = false;
+            sendButton.innerHTML = '<i class="fas fa-paper-plane"></i> Send Bulk Emails';
+        }
+    } else {
+        sendButton.disabled = false;
+        sendButton.innerHTML = '<i class="fas fa-paper-plane"></i> Send Bulk Emails';
+    }
+}
+
 function insertPlaceholder(columnName) {
     const textarea = document.getElementById('template');
     const placeholder = '{' + columnName + '}';
@@ -313,13 +393,20 @@ function updatePreview() {
     }
 }
 
-// Update preview as user types
-document.getElementById('template').addEventListener('input', updatePreview);
-
-// Initial preview update
+// Add event listeners
 document.addEventListener('DOMContentLoaded', function() {
     updatePreview();
+    
+    // Add event listener for sender selection change
+    document.getElementById('selected_sender').addEventListener('change', validateForm);
+    document.getElementById('sender_mode').addEventListener('change', validateForm);
+    
+    // Initial validation
+    validateForm();
 });
+
+// Update preview as user types
+document.getElementById('template').addEventListener('input', updatePreview);
 
 // Preserve formatting when pasting
 document.getElementById('template').addEventListener('paste', function(e) {
