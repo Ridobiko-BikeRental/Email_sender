@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <!-- Back button -->
+        <div class="mb-3">
+            <a href="{{ url_for('logs') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left"></i> Back to Logs
+            </a>
+        </div>
+
+        <!-- Log Summary -->
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4><i class="fas fa-info-circle"></i> Email Log Details</h4>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-borderless">
+                            <tr>
+                                <th width="150">Log File:</th>
+                                <td>{{ log.log_filename }}</td>
+                            </tr>
+                            <tr>
+                                <th>Date & Time:</th>
+                                <td>{{ log.created_at }}</td>
+                            </tr>
+                            <tr>
+                                <th>Sender Email:</th>
+                                <td>{{ log.sender_email or 'Multiple (Auto-rotate)' }}</td>
+                            </tr>
+                            <tr>
+                                <th>Sending Mode:</th>
+                                <td>
+                                    <span class="badge {% if log.sender_mode == 'auto' %}bg-info{% else %}bg-success{% endif %}">
+                                        {{ log.sender_mode.title() }}
+                                    </span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th>Subject:</th>
+                                <td>{{ log.subject }}</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-borderless">
+                            <tr>
+                                <th width="150">Total Emails:</th>
+                                <td><span class="badge bg-secondary">{{ log.total_emails }}</span></td>
+                            </tr>
+                            <tr>
+                                <th>Successful:</th>
+                                <td><span class="badge bg-success">{{ log.sent_count }}</span></td>
+                            </tr>
+                            <tr>
+                                <th>Failed:</th>
+                                <td><span class="badge {% if log.failed_count > 0 %}bg-danger{% else %}bg-secondary{% endif %}">{{ log.failed_count }}</span></td>
+                            </tr>
+                            <tr>
+                                <th>Duration:</th>
+                                <td>{{ "%.2f"|format(log.duration_seconds) }} seconds</td>
+                            </tr>
+                            <tr>
+                                <th>Success Rate:</th>
+                                <td>
+                                    {% set success_rate = (log.sent_count / log.total_emails * 100) if log.total_emails > 0 else 0 %}
+                                    <span class="badge {% if success_rate >= 90 %}bg-success{% elif success_rate >= 70 %}bg-warning{% else %}bg-danger{% endif %}">
+                                        {{ "%.1f"|format(success_rate) }}%
+                                    </span>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Email Status Details -->
+        <div class="card mt-4">
+            <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                <h5><i class="fas fa-list"></i> Individual Email Status</h5>
+                <span class="badge bg-light text-dark">{{ email_statuses|length }} Recipients</span>
+            </div>
+            <div class="card-body">
+                {% if email_statuses %}
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Recipient Email</th>
+                                    <th>Sender</th>
+                                    <th>Status</th>
+                                    <th>Error Message</th>
+                                    <th>Sent At</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for status in email_statuses %}
+                                <tr>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="fas fa-envelope me-2 text-muted"></i>
+                                            {{ status.recipient_email }}
+                                        </div>
+                                    </td>
+                                    <td>{{ status.sender_email }}</td>
+                                    <td>
+                                        {% if status.status == 'success' %}
+                                            <span class="badge bg-success">
+                                                <i class="fas fa-check"></i> Success
+                                            </span>
+                                        {% else %}
+                                            <span class="badge bg-danger">
+                                                <i class="fas fa-times"></i> Failed
+                                            </span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if status.error_message %}
+                                            <span class="text-danger" title="{{ status.error_message }}">
+                                                {{ status.error_message[:50] }}{% if status.error_message|length > 50 %}...{% endif %}
+                                            </span>
+                                        {% else %}
+                                            <span class="text-muted">-</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">{{ status.sent_at }}</small>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="text-center py-3">
+                        <i class="fas fa-inbox fa-2x text-muted mb-2"></i>
+                        <p class="text-muted">No email status records found for this log.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

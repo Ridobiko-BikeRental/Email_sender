@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h4><i class="fas fa-plus-circle"></i> Add New Email Account</h4>
+                </div>
+                <div class="card-body">
+                    <form action="{{ url_for('add_account') }}" method="post">
+                        <div class="mb-3">
+                            <label for="email" class="form-label">Email Address:</label>
+                            <input type="email" class="form-control" id="email" name="email" required 
+                                   placeholder="example@gmail.com">
+                            <div class="form-text">Enter Gmail address that will be used for sending emails</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="password" class="form-label">App Password:</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" id="password" name="password" required 
+                                       placeholder="xxxx xxxx xxxx xxxx">
+                                <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('password')">
+                                    <i class="fas fa-eye" id="password-icon"></i>
+                                </button>
+                            </div>
+                            <div class="form-text">
+                                <strong>Important:</strong> Use Gmail App Password, not your regular password.
+                                <a href="https://myaccount.google.com/apppasswords" target="_blank" class="text-decoration-none">
+                                    <i class="fas fa-external-link-alt"></i> Generate App Password
+                                </a>
+                            </div>
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Add Email Account
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Instructions Card -->
+            <div class="card mt-4">
+                <div class="card-header bg-info text-white">
+                    <h5><i class="fas fa-info-circle"></i> Setup Instructions</h5>
+                </div>
+                <div class="card-body">
+                    <ol class="mb-0">
+                        <li><strong>Enable 2-Factor Authentication</strong> on your Gmail account</li>
+                        <li><strong>Generate App Password:</strong>
+                            <ul>
+                                <li>Go to <a href="https://myaccount.google.com/apppasswords" target="_blank">Google App Passwords</a></li>
+                                <li>Select "Mail" as the app</li>
+                                <li>Copy the 16-character password</li>
+                            </ul>
+                        </li>
+                        <li><strong>Add Account:</strong> Use your Gmail address and the App Password above</li>
+                        <li><strong>Daily Limit:</strong> Each account can send up to 15 emails per day</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-success text-white">
+                    <h4><i class="fas fa-users"></i> Email Accounts ({{ account_stats|length }})</h4>
+                </div>
+                <div class="card-body">
+                    {% if account_stats %}
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Email</th>
+                                        <th>Status</th>
+                                        <th>Usage Today</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for account in account_stats %}
+                                    <tr>
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <i class="fas fa-envelope me-2 {% if account.is_active %}text-success{% else %}text-danger{% endif %}"></i>
+                                                <span>{{ account.email }}</span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="badge {% if account.is_active %}bg-success{% else %}bg-secondary{% endif %}">
+                                                {% if account.is_active %}Active{% else %}Inactive{% endif %}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="d-flex align-items-center">
+                                                <div class="progress me-2" style="width: 60px; height: 8px;">
+                                                    <div class="progress-bar {% if account.percentage_used < 70 %}bg-success{% elif account.percentage_used < 90 %}bg-warning{% else %}bg-danger{% endif %}" 
+                                                         style="width: {{ account.percentage_used }}%"></div>
+                                                </div>
+                                                <small>{{ account.sent_today }}/{{ account.limit }}</small>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button type="button" class="btn btn-outline-primary" 
+                                                        onclick="editAccount({{ account.id }}, '{{ account.email }}', {{ account.is_active|lower }})"
+                                                        data-bs-toggle="modal" data-bs-target="#editModal">
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                                <button type="button" class="btn btn-outline-danger" 
+                                                        onclick="deleteAccount({{ account.id }}, '{{ account.email }}')"
+                                                        data-bs-toggle="modal" data-bs-target="#deleteModal">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="text-center py-5">
+                            <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+                            <h5 class="text-muted">No Email Accounts</h5>
+                            <p class="text-muted">Add your first email account to start sending bulk emails.</p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div }
+    </div>
+
+    <!-- Quick Stats Row -->
+    {% if account_stats %}
+    <div class="row mt-4">
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h3 class="text-primary">{{ account_stats|length }}</h3>
+                    <p class="card-text">Total Accounts</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h3 class="text-success">{{ account_stats|selectattr("is_active")|list|length }}</h3>
+                    <p class="card-text">Active Accounts</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h3 class="text-info">{{ account_stats|sum(attribute='sent_today') }}</h3>
+                    <p class="card-text">Emails Sent Today</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-center">
+                <div class="card-body">
+                    <h3 class="text-warning">{{ account_stats|selectattr("is_active")|sum(attribute='remaining') }}</h3>
+                    <p class="card-text">Remaining Quota</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Edit Account Modal -->
+<div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editModalLabel">Edit Email Account</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form id="editForm" method="post">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="editEmail" class="form-label">Email Address:</label>
+                        <input type="email" class="form-control" id="editEmail" name="email" required>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="editPassword" class="form-label">App Password:</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="editPassword" name="password" required>
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('editPassword')">
+                                <i class="fas fa-eye" id="editPassword-icon"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="editActive" name="is_active">
+                        <label class="form-check-label" for="editActive">
+                            Account Active
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Update Account</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Account Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteModalLabel">Delete Email Account</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <strong>Warning!</strong> This action cannot be undone.
+                </div>
+                <p>Are you sure you want to delete the email account:</p>
+                <p><strong id="deleteEmailText"></strong></p>
+                <p>This will also remove all associated email logs and statistics.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form id="deleteForm" method="post" style="display: inline;">
+                    <button type="submit" class="btn btn-danger">Delete Account</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function togglePassword(fieldId) {
+    const field = document.getElementById(fieldId);
+    const icon = document.getElementById(fieldId + '-icon');
+    
+    if (field.type === 'password') {
+        field.type = 'text';
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+    } else {
+        field.type = 'password';
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+    }
+}
+
+function editAccount(id, email, isActive) {
+    document.getElementById('editEmail').value = email;
+    document.getElementById('editPassword').value = ''; // Don't pre-fill password for security
+    document.getElementById('editActive').checked = isActive;
+    document.getElementById('editForm').action = '/update_account/' + id;
+}
+
+function deleteAccount(id, email) {
+    document.getElementById('deleteEmailText').textContent = email;
+    document.getElementById('deleteForm').action = '/delete_account/' + id;
+}
+
+// Auto-hide alerts after 5 seconds
+document.addEventListener('DOMContentLoaded', function() {
+    const alerts = document.querySelectorAll('.alert');
+    alerts.forEach(function(alert) {
+        setTimeout(function() {
+            alert.style.transition = 'opacity 0.5s';
+            alert.style.opacity = '0';
+            setTimeout(function() {
+                alert.remove();
+            }, 500);
+        }, 5000);
+    });
+});
+</script>
+
+<style>
+.progress {
+    border-radius: 10px;
+}
+
+.card {
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    border: 1px solid rgba(0, 0, 0, 0.125);
+}
+
+.card-header {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+}
+
+.btn-group-sm > .btn, .btn-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+}
+
+.table th {
+    border-top: none;
+    font-weight: 600;
+}
+
+.modal-content {
+    border-radius: 0.5rem;
+}
+
+.alert {
+    border-radius: 0.5rem;
+}
+
+/* Custom styling for better visual hierarchy */
+.text-primary { color: #0d6efd !important; }
+.text-success { color: #198754 !important; }
+.text-info { color: #0dcaf0 !important; }
+.text-warning { color: #ffc107 !important; }
+.text-danger { color: #dc3545 !important; }
+
+.bg-primary { background-color: #0d6efd !important; }
+.bg-success { background-color: #198754 !important; }
+.bg-info { background-color: #0dcaf0 !important; }
+.bg-warning { background-color: #ffc107 !important; }
+.bg-danger { background-color: #dc3545 !important; }
+</style>
+{% endblock %}

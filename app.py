@@ -1,6 +1,7 @@
 import os
 import csv
 import smtplib
+import sqlite3
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from flask import Flask, render_template, request, flash, redirect, url_for, jsonify, session
@@ -8,11 +9,12 @@ from werkzeug.utils import secure_filename
 import time
 from threading import Thread
 import logging
-from datetime import datetime
+from datetime import datetime, date
 import json
 from dotenv import load_dotenv
 from openpyxl import load_workbook
 import html
+from contextlib import contextmanager
 
 # Load environment variables
 load_dotenv()
@@ -25,25 +27,8 @@ UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
 LOGS_FOLDER = 'logs'
+DATABASE_PATH = 'email_system.db'
 EMAIL_LIMIT_PER_ACCOUNT = 15  # Limit per account
-
-# Load multiple email configurations from environment
-def load_email_accounts():
-    """Load all email accounts from environment variables"""
-    email_accounts = {}
-    for i in range(1, 11):  # Support up to 10 accounts
-        email = os.getenv(f'SENDER_EMAIL_{i}')
-        password = os.getenv(f'SENDER_APP_PASSWORD_{i}')
-        if email and password:
-            email_accounts[email] = {
-                'password': password,
-                'sent_count': 0,  # Track emails sent from this account
-                'last_reset': datetime.now().date()  # Track when count was last reset
-            }
-    return email_accounts
-
-# Global email accounts configuration
-EMAIL_ACCOUNTS = load_email_accounts()
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
@@ -65,6 +50,73 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Database context manager
+@contextmanager
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+# Initialize database
+def init_database():
+    """Initialize SQLite database with required tables"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Create email accounts table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS email_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT 1,
+                sent_count INTEGER DEFAULT 0,
+                last_reset DATE DEFAULT CURRENT_DATE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create email logs table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS email_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                log_filename TEXT NOT NULL,
+                sender_email TEXT,
+                sender_mode TEXT,
+                total_emails INTEGER,
+                sent_count INTEGER,
+                failed_count INTEGER,
+                duration_seconds REAL,
+                subject TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                log_data TEXT
+            )
+        ''')
+        
+        # Create individual email status table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS email_status (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                log_id INTEGER,
+                recipient_email TEXT,
+                sender_email TEXT,
+                status TEXT,
+                error_message TEXT,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (log_id) REFERENCES email_logs (id)
+            )
+        ''')
+        
+        conn.commit()
+        logger.info("Database initialized successfully")
+
+# Initialize database on startup
+init_database()
+
 # Global variable to store current email sending status
 email_status = {
     'is_sending': False,
@@ -73,11 +125,199 @@ email_status = {
     'failed_count': 0,
     'current_email': '',
     'current_sender': '',
-    'sender_rotation': {},  # Track which sender is being used
+    'sender_rotation': {},
     'start_time': None,
     'failed_emails': [],
     'success_emails': []
 }
+
+# Database functions
+def get_email_accounts():
+    """Get all email accounts from database"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, email, password, is_active, sent_count, last_reset, created_at 
+            FROM email_accounts 
+            WHERE is_active = 1 
+            ORDER BY created_at
+        ''')
+        return cursor.fetchall()
+
+def add_email_account(email, password):
+    """Add new email account to database"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO email_accounts (email, password) 
+                VALUES (?, ?)
+            ''', (email, password))
+            conn.commit()
+            logger.info(f"Added email account: {email}")
+            return True, "Email account added successfully"
+    except sqlite3.IntegrityError:
+        return False, "Email account already exists"
+    except Exception as e:
+        logger.error(f"Error adding email account: {e}")
+        return False, f"Error adding email account: {str(e)}"
+
+def update_email_account(account_id, email, password, is_active):
+    """Update email account in database"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE email_accounts 
+                SET email = ?, password = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (email, password, is_active, account_id))
+            conn.commit()
+            logger.info(f"Updated email account ID: {account_id}")
+            return True, "Email account updated successfully"
+    except sqlite3.IntegrityError:
+        return False, "Email address already exists"
+    except Exception as e:
+        logger.error(f"Error updating email account: {e}")
+        return False, f"Error updating email account: {str(e)}"
+
+def delete_email_account(account_id):
+    """Delete email account from database"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM email_accounts WHERE id = ?', (account_id,))
+            conn.commit()
+            logger.info(f"Deleted email account ID: {account_id}")
+            return True, "Email account deleted successfully"
+    except Exception as e:
+        logger.error(f"Error deleting email account: {e}")
+        return False, f"Error deleting email account: {str(e)}"
+
+def reset_daily_counts():
+    """Reset email counts daily"""
+    today = date.today()
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE email_accounts 
+            SET sent_count = 0, last_reset = ? 
+            WHERE last_reset < ?
+        ''', (today, today))
+        
+        if cursor.rowcount > 0:
+            conn.commit()
+            logger.info(f"Reset email count for {cursor.rowcount} accounts")
+
+def get_available_sender():
+    """Get next available sender account that hasn't reached the limit"""
+    reset_daily_counts()
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT email, password FROM email_accounts 
+            WHERE is_active = 1 AND sent_count < ? 
+            ORDER BY sent_count ASC, created_at ASC 
+            LIMIT 1
+        ''', (EMAIL_LIMIT_PER_ACCOUNT,))
+        
+        result = cursor.fetchone()
+        if result:
+            return result['email'], result['password']
+        
+        # If all accounts have reached the limit, return the first active one
+        cursor.execute('''
+            SELECT email, password FROM email_accounts 
+            WHERE is_active = 1 
+            ORDER BY created_at ASC 
+            LIMIT 1
+        ''')
+        
+        result = cursor.fetchone()
+        if result:
+            logger.warning(f"All accounts have reached daily limit. Using {result['email']}")
+            return result['email'], result['password']
+    
+    return None, None
+
+def get_account_stats():
+    """Get statistics for all email accounts"""
+    reset_daily_counts()
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, email, sent_count, is_active, created_at
+            FROM email_accounts 
+            ORDER BY created_at
+        ''')
+        
+        accounts = cursor.fetchall()
+        stats = []
+        
+        for account in accounts:
+            remaining = EMAIL_LIMIT_PER_ACCOUNT - account['sent_count'] if account['is_active'] else 0
+            stats.append({
+                'id': account['id'],
+                'email': account['email'],
+                'sent_today': account['sent_count'],
+                'remaining': remaining,
+                'limit': EMAIL_LIMIT_PER_ACCOUNT,
+                'percentage_used': (account['sent_count'] / EMAIL_LIMIT_PER_ACCOUNT) * 100,
+                'is_active': account['is_active'],
+                'created_at': account['created_at']
+            })
+        
+        return stats
+
+def save_email_log(log_data, log_filename):
+    """Save email log to database"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Insert main log entry
+            cursor.execute('''
+                INSERT INTO email_logs 
+                (log_filename, sender_email, sender_mode, total_emails, sent_count, 
+                 failed_count, duration_seconds, subject, log_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                log_filename,
+                log_data.get('sender_email'),
+                log_data.get('sender_mode', 'auto'),
+                log_data.get('total_emails', 0),
+                log_data.get('sent_count', 0),
+                log_data.get('failed_count', 0),
+                log_data.get('duration_seconds', 0),
+                log_data.get('subject', ''),
+                json.dumps(log_data)
+            ))
+            
+            log_id = cursor.lastrowid
+            
+            # Insert individual email statuses
+            for email in log_data.get('success_emails', []):
+                cursor.execute('''
+                    INSERT INTO email_status (log_id, recipient_email, sender_email, status)
+                    VALUES (?, ?, ?, ?)
+                ''', (log_id, email, log_data.get('sender_email'), 'success'))
+            
+            for failed_entry in log_data.get('failed_emails', []):
+                if ':' in failed_entry:
+                    email, error = failed_entry.split(':', 1)
+                    cursor.execute('''
+                        INSERT INTO email_status (log_id, recipient_email, sender_email, status, error_message)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (log_id, email.strip(), log_data.get('sender_email'), 'failed', error.strip()))
+            
+            conn.commit()
+            logger.info(f"Saved email log to database: {log_filename}")
+            
+    except Exception as e:
+        logger.error(f"Error saving email log to database: {e}")
 
 class SimpleDataFrame:
     """Simple DataFrame-like class to replace pandas"""
@@ -103,48 +343,6 @@ class SimpleDataFrame:
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def reset_daily_counts():
-    """Reset email counts daily"""
-    global EMAIL_ACCOUNTS
-    today = datetime.now().date()
-    
-    for email, account_info in EMAIL_ACCOUNTS.items():
-        if account_info['last_reset'] < today:
-            account_info['sent_count'] = 0
-            account_info['last_reset'] = today
-            logger.info(f"Reset email count for {email}")
-
-def get_available_sender():
-    """Get next available sender account that hasn't reached the limit"""
-    reset_daily_counts()  # Reset counts if it's a new day
-    
-    for email, account_info in EMAIL_ACCOUNTS.items():
-        if account_info['sent_count'] < EMAIL_LIMIT_PER_ACCOUNT:
-            return email, account_info['password']
-    
-    # If all accounts have reached the limit, return the first one with a warning
-    if EMAIL_ACCOUNTS:
-        first_email = list(EMAIL_ACCOUNTS.keys())[0]
-        logger.warning(f"All accounts have reached daily limit. Using {first_email}")
-        return first_email, EMAIL_ACCOUNTS[first_email]['password']
-    
-    return None, None
-
-def get_account_stats():
-    """Get statistics for all email accounts"""
-    reset_daily_counts()
-    stats = []
-    for email, account_info in EMAIL_ACCOUNTS.items():
-        remaining = EMAIL_LIMIT_PER_ACCOUNT - account_info['sent_count']
-        stats.append({
-            'email': email,
-            'sent_today': account_info['sent_count'],
-            'remaining': remaining,
-            'limit': EMAIL_LIMIT_PER_ACCOUNT,
-            'percentage_used': (account_info['sent_count'] / EMAIL_LIMIT_PER_ACCOUNT) * 100
-        })
-    return stats
 
 def read_csv_file(filepath):
     """Read CSV file"""
@@ -260,9 +458,15 @@ def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recip
         server.sendmail(sender_email, recipient_email, text)
         server.quit()
         
-        # Update the account's sent count
-        if sender_email in EMAIL_ACCOUNTS:
-            EMAIL_ACCOUNTS[sender_email]['sent_count'] += 1
+        # Update the account's sent count in database
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE email_accounts 
+                SET sent_count = sent_count + 1 
+                WHERE email = ?
+            ''', (sender_email,))
+            conn.commit()
         
         logger.info(f"Email sent successfully to {recipient_email} from {sender_email}")
         return True, "Email sent successfully"
@@ -276,8 +480,9 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
     global email_status
     
     # Check if we have any email accounts configured
-    if not EMAIL_ACCOUNTS:
-        return False, "No email accounts configured in environment variables"
+    accounts = get_email_accounts()
+    if not accounts:
+        return False, "No email accounts configured. Please add email accounts first."
     
     # Reset status
     email_status.update({
@@ -320,11 +525,7 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
         email_status['current_email'] = recipient_email
         
         # Get next available sender if current one reached limit or is None
-        if (current_sender is None or 
-            emails_sent_with_current >= EMAIL_LIMIT_PER_ACCOUNT or
-            (current_sender in EMAIL_ACCOUNTS and 
-             EMAIL_ACCOUNTS[current_sender]['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT)):
-            
+        if (current_sender is None or emails_sent_with_current >= EMAIL_LIMIT_PER_ACCOUNT):
             current_sender, current_password = get_available_sender()
             emails_sent_with_current = 0
             
@@ -368,7 +569,7 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
     end_time = datetime.now()
     duration = end_time - email_status['start_time']
     
-    # Save detailed log to file
+    # Save detailed log to file and database
     log_data = {
         'timestamp': end_time.isoformat(),
         'duration_seconds': duration.total_seconds(),
@@ -378,13 +579,19 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
         'success_emails': email_status['success_emails'],
         'failed_emails': email_status['failed_emails'],
         'subject': subject,
+        'sender_mode': 'auto',
         'sender_rotation': email_status['sender_rotation'],
         'account_stats': get_account_stats()
     }
     
     log_filename = f"bulk_email_log_{end_time.strftime('%Y%m%d_%H%M%S')}.json"
+    
+    # Save to file
     with open(os.path.join(LOGS_FOLDER, log_filename), 'w') as f:
         json.dump(log_data, f, indent=2)
+    
+    # Save to database
+    save_email_log(log_data, log_filename)
     
     logger.info(f"Bulk email sending completed. {email_status['sent_count']} sent, {email_status['failed_count']} failed. Duration: {duration}")
     
@@ -402,12 +609,23 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
     global email_status
     
     # Check if sender exists and has quota
-    if sender_email not in EMAIL_ACCOUNTS:
-        return False, "Selected sender account not found"
-    
-    reset_daily_counts()
-    if EMAIL_ACCOUNTS[sender_email]['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
-        return False, f"Selected account has reached daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT email, password, sent_count, is_active 
+            FROM email_accounts 
+            WHERE email = ? AND is_active = 1
+        ''', (sender_email,))
+        
+        account = cursor.fetchone()
+        if not account:
+            return False, "Selected sender account not found or inactive"
+        
+        reset_daily_counts()
+        if account['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
+            return False, f"Selected account has reached daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails"
+        
+        sender_password = account['password']
     
     # Reset status
     email_status.update({
@@ -437,7 +655,7 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
     email_status['total_emails'] = len(valid_emails)
     
     # Check if we can send all emails with this account
-    remaining_quota = EMAIL_LIMIT_PER_ACCOUNT - EMAIL_ACCOUNTS[sender_email]['sent_count']
+    remaining_quota = EMAIL_LIMIT_PER_ACCOUNT - account['sent_count']
     if len(valid_emails) > remaining_quota:
         email_status['is_sending'] = False
         return False, f"Cannot send {len(valid_emails)} emails. Account {sender_email} has only {remaining_quota} emails remaining today."
@@ -446,7 +664,6 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
     
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
-    sender_password = EMAIL_ACCOUNTS[sender_email]['password']
     
     for index, row in enumerate(valid_emails):
         recipient_email = row.get(email_column, '').strip()
@@ -481,7 +698,7 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
     end_time = datetime.now()
     duration = end_time - email_status['start_time']
     
-    # Save detailed log to file
+    # Save detailed log to file and database
     log_data = {
         'timestamp': end_time.isoformat(),
         'duration_seconds': duration.total_seconds(),
@@ -498,8 +715,13 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
     }
     
     log_filename = f"bulk_email_log_{end_time.strftime('%Y%m%d_%H%M%S')}.json"
+    
+    # Save to file
     with open(os.path.join(LOGS_FOLDER, log_filename), 'w') as f:
         json.dump(log_data, f, indent=2)
+    
+    # Save to database
+    save_email_log(log_data, log_filename)
     
     logger.info(f"Bulk email sending completed from {sender_email}. {email_status['sent_count']} sent, {email_status['failed_count']} failed. Duration: {duration}")
     
@@ -512,6 +734,7 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
         'sender_rotation': email_status['sender_rotation']
     }
 
+# Routes
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -543,7 +766,6 @@ def upload_file():
                                  filename=filename, 
                                  columns=columns,
                                  sample_data=sample_data,
-                                 email_accounts=EMAIL_ACCOUNTS,
                                  account_stats=account_stats)
         else:
             flash('Failed to read the uploaded file')
@@ -582,25 +804,33 @@ def send_emails():
             logger.error("Manual mode selected but no sender specified")
             return redirect(url_for('index'))
         
-        # Validate that the selected sender exists in our accounts
-        if selected_sender not in EMAIL_ACCOUNTS:
-            flash(f'Selected email account "{selected_sender}" is not configured.')
-            logger.error(f"Selected sender {selected_sender} not found in EMAIL_ACCOUNTS: {list(EMAIL_ACCOUNTS.keys())}")
-            return redirect(url_for('index'))
+        # Validate that the selected sender exists in database
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id FROM email_accounts WHERE email = ? AND is_active = 1', (selected_sender,))
+            if not cursor.fetchone():
+                flash(f'Selected email account "{selected_sender}" is not configured or inactive.')
+                logger.error(f"Selected sender {selected_sender} not found in database")
+                return redirect(url_for('index'))
     
-    if not EMAIL_ACCOUNTS:
-        flash('No email accounts configured. Please contact administrator.')
-        logger.error("No EMAIL_ACCOUNTS configured")
-        return redirect(url_for('index'))
+    # Check if we have any email accounts
+    accounts = get_email_accounts()
+    if not accounts:
+        flash('No email accounts configured. Please add email accounts first.')
+        logger.error("No email accounts configured")
+        return redirect(url_for('manage_accounts'))
     
     # Check if selected sender has remaining quota
     if sender_mode == 'manual' and selected_sender:
-        reset_daily_counts()  # Ensure counts are up to date
-        if (selected_sender in EMAIL_ACCOUNTS and 
-            EMAIL_ACCOUNTS[selected_sender]['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT):
-            flash(f'Selected account {selected_sender} has reached its daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails.')
-            logger.warning(f"Account {selected_sender} has reached daily limit")
-            return redirect(url_for('index'))
+        reset_daily_counts()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT sent_count FROM email_accounts WHERE email = ?', (selected_sender,))
+            account = cursor.fetchone()
+            if account and account['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
+                flash(f'Selected account {selected_sender} has reached its daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails.')
+                logger.warning(f"Account {selected_sender} has reached daily limit")
+                return redirect(url_for('index'))
     
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     
@@ -630,7 +860,7 @@ def send_emails():
                     rotation_info = ", ".join([f"{email}: {count}" for email, count in result['sender_rotation'].items()])
                     flash(f"Sender distribution: {rotation_info}")
                 if result['failed_emails']:
-                    flash(f"Failed emails: {', '.join(result['failed_emails'][:5])}")  # Show first 5 failures
+                    flash(f"Failed emails: {', '.join(result['failed_emails'][:5])}")
                 logger.info(f"Bulk email sending completed successfully: {result}")
             else:
                 flash(f"Error: {result}")
@@ -648,6 +878,48 @@ def send_emails():
     logger.info("Email sending thread started successfully")
     return redirect(url_for('status'))
 
+@app.route('/manage_accounts')
+def manage_accounts():
+    """Display email account management page"""
+    account_stats = get_account_stats()
+    return render_template('manage_accounts.html', account_stats=account_stats)
+
+@app.route('/add_account', methods=['POST'])
+def add_account():
+    """Add new email account"""
+    email = request.form.get('email', '').strip()
+    password = request.form.get('password', '').strip()
+    
+    if not email or not password:
+        flash('Email and password are required.')
+        return redirect(url_for('manage_accounts'))
+    
+    success, message = add_email_account(email, password)
+    flash(message)
+    return redirect(url_for('manage_accounts'))
+
+@app.route('/update_account/<int:account_id>', methods=['POST'])
+def update_account(account_id):
+    """Update email account"""
+    email = request.form.get('email', '').strip()
+    password = request.form.get('password', '').strip()
+    is_active = request.form.get('is_active') == 'on'
+    
+    if not email or not password:
+        flash('Email and password are required.')
+        return redirect(url_for('manage_accounts'))
+    
+    success, message = update_email_account(account_id, email, password, is_active)
+    flash(message)
+    return redirect(url_for('manage_accounts'))
+
+@app.route('/delete_account/<int:account_id>', methods=['POST'])
+def delete_account(account_id):
+    """Delete email account"""
+    success, message = delete_email_account(account_id)
+    flash(message)
+    return redirect(url_for('manage_accounts'))
+
 @app.route('/status')
 def status():
     """Display real-time email sending status"""
@@ -661,32 +933,69 @@ def api_status():
     status_data['account_stats'] = get_account_stats()
     return jsonify(status_data)
 
-@app.route('/accounts')
-def accounts():
-    """Display account statistics"""
-    account_stats = get_account_stats()
-    return render_template('accounts.html', account_stats=account_stats)
-
 @app.route('/logs')
 def logs():
-    """Display email sending logs"""
-    log_files = []
-    if os.path.exists(LOGS_FOLDER):
-        for filename in os.listdir(LOGS_FOLDER):
-            if filename.endswith('.json'):
-                filepath = os.path.join(LOGS_FOLDER, filename)
-                try:
-                    with open(filepath, 'r') as f:
-                        log_data = json.load(f)
-                        log_data['filename'] = filename
-                        log_files.append(log_data)
-                except:
-                    continue
+    """Display email sending logs from database"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT el.*, 
+                   COUNT(es.id) as total_recipients,
+                   SUM(CASE WHEN es.status = 'success' THEN 1 ELSE 0 END) as successful_sends,
+                   SUM(CASE WHEN es.status = 'failed' THEN 1 ELSE 0 END) as failed_sends
+            FROM email_logs el
+            LEFT JOIN email_status es ON el.id = es.log_id
+            GROUP BY el.id
+            ORDER BY el.created_at DESC
+            LIMIT 50
+        ''')
+        
+        logs = []
+        for row in cursor.fetchall():
+            log_data = {
+                'id': row['id'],
+                'log_filename': row['log_filename'],
+                'sender_email': row['sender_email'],
+                'sender_mode': row['sender_mode'],
+                'total_emails': row['total_emails'],
+                'sent_count': row['sent_count'],
+                'failed_count': row['failed_count'],
+                'duration_seconds': row['duration_seconds'],
+                'subject': row['subject'],
+                'created_at': row['created_at'],
+                'total_recipients': row['total_recipients'] or 0,
+                'successful_sends': row['successful_sends'] or 0,
+                'failed_sends': row['failed_sends'] or 0
+            }
+            logs.append(log_data)
     
-    # Sort by timestamp (newest first)
-    log_files.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    return render_template('logs.html', logs=logs)
+
+@app.route('/log_details/<int:log_id>')
+def log_details(log_id):
+    """Display detailed log information"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Get log info
+        cursor.execute('SELECT * FROM email_logs WHERE id = ?', (log_id,))
+        log = cursor.fetchone()
+        
+        if not log:
+            flash('Log not found.')
+            return redirect(url_for('logs'))
+        
+        # Get email statuses
+        cursor.execute('''
+            SELECT recipient_email, sender_email, status, error_message, sent_at
+            FROM email_status 
+            WHERE log_id = ?
+            ORDER BY sent_at
+        ''', (log_id,))
+        
+        email_statuses = cursor.fetchall()
     
-    return render_template('logs.html', logs=log_files)
+    return render_template('log_details.html', log=log, email_statuses=email_statuses)
 
 # Health check endpoint for Render
 @app.route('/health')
