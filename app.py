@@ -562,56 +562,90 @@ def send_emails():
     email_column = request.form.get('email_column')
     delay = int(request.form.get('delay', 1))
     
+    # Debug logging
+    logger.info(f"Form data received - filename: {filename}, sender_mode: {sender_mode}, selected_sender: '{selected_sender}', subject: {subject}, template length: {len(template) if template else 0}, email_column: {email_column}")
+    
     # Validate all required fields
     if not all([filename, sender_mode, subject, template, email_column]):
         flash('All fields are required.')
+        logger.error("Missing required fields")
         return redirect(url_for('index'))
     
+    # Clean up selected_sender - convert empty string to None
+    if selected_sender == '' or selected_sender is None:
+        selected_sender = None
+    
     # Validate sender selection for manual mode
-    if sender_mode == 'manual' and not selected_sender:
-        flash('Please select an email account for manual mode.')
-        return redirect(url_for('index'))
+    if sender_mode == 'manual':
+        if not selected_sender:
+            flash('Please select an email account for manual mode.')
+            logger.error("Manual mode selected but no sender specified")
+            return redirect(url_for('index'))
+        
+        # Validate that the selected sender exists in our accounts
+        if selected_sender not in EMAIL_ACCOUNTS:
+            flash(f'Selected email account "{selected_sender}" is not configured.')
+            logger.error(f"Selected sender {selected_sender} not found in EMAIL_ACCOUNTS: {list(EMAIL_ACCOUNTS.keys())}")
+            return redirect(url_for('index'))
     
     if not EMAIL_ACCOUNTS:
         flash('No email accounts configured. Please contact administrator.')
+        logger.error("No EMAIL_ACCOUNTS configured")
         return redirect(url_for('index'))
     
     # Check if selected sender has remaining quota
-    if sender_mode == 'manual':
+    if sender_mode == 'manual' and selected_sender:
         reset_daily_counts()  # Ensure counts are up to date
         if (selected_sender in EMAIL_ACCOUNTS and 
             EMAIL_ACCOUNTS[selected_sender]['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT):
             flash(f'Selected account {selected_sender} has reached its daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails.')
+            logger.warning(f"Account {selected_sender} has reached daily limit")
             return redirect(url_for('index'))
     
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     
+    # Validate that the file exists
+    if not os.path.exists(filepath):
+        flash('Uploaded file not found. Please upload the file again.')
+        logger.error(f"File not found: {filepath}")
+        return redirect(url_for('index'))
+    
     # Start sending emails in background thread
     def send_emails_task():
-        if sender_mode == 'auto':
-            success, result = send_bulk_emails(
-                filepath, subject, template, email_column, delay
-            )
-        else:  # manual mode
-            success, result = send_bulk_emails_single_sender(
-                filepath, selected_sender, subject, template, email_column, delay
-            )
-        
-        if success:
-            flash(f"Bulk email sending completed! {result['success_count']} sent, {result['failed_count']} failed in {result['duration']}")
-            if result.get('sender_rotation'):
-                rotation_info = ", ".join([f"{email}: {count}" for email, count in result['sender_rotation'].items()])
-                flash(f"Sender distribution: {rotation_info}")
-            if result['failed_emails']:
-                flash(f"Failed emails: {', '.join(result['failed_emails'][:5])}")  # Show first 5 failures
-        else:
-            flash(f"Error: {result}")
+        try:
+            if sender_mode == 'auto':
+                logger.info("Starting auto-rotate email sending")
+                success, result = send_bulk_emails(
+                    filepath, subject, template, email_column, delay
+                )
+            else:  # manual mode
+                logger.info(f"Starting manual email sending with sender: {selected_sender}")
+                success, result = send_bulk_emails_single_sender(
+                    filepath, selected_sender, subject, template, email_column, delay
+                )
+            
+            if success:
+                flash(f"Bulk email sending completed! {result['success_count']} sent, {result['failed_count']} failed in {result['duration']}")
+                if result.get('sender_rotation'):
+                    rotation_info = ", ".join([f"{email}: {count}" for email, count in result['sender_rotation'].items()])
+                    flash(f"Sender distribution: {rotation_info}")
+                if result['failed_emails']:
+                    flash(f"Failed emails: {', '.join(result['failed_emails'][:5])}")  # Show first 5 failures
+                logger.info(f"Bulk email sending completed successfully: {result}")
+            else:
+                flash(f"Error: {result}")
+                logger.error(f"Bulk email sending failed: {result}")
+        except Exception as e:
+            error_msg = f"Error in email sending task: {str(e)}"
+            flash(error_msg)
+            logger.error(error_msg, exc_info=True)
     
     thread = Thread(target=send_emails_task)
     thread.daemon = True
     thread.start()
     
     flash('Email sending started in background. Check the status page for real-time updates.')
+    logger.info("Email sending thread started successfully")
     return redirect(url_for('status'))
 
 @app.route('/status')

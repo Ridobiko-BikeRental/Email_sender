@@ -329,23 +329,35 @@ function validateForm() {
     const selectedSender = document.getElementById('selected_sender').value;
     const sendButton = document.getElementById('sendButton');
     
+    // Don't disable the button if it doesn't exist (no accounts configured)
+    if (!sendButton) return;
+    
     if (senderMode === 'manual' && !selectedSender) {
         sendButton.disabled = true;
         sendButton.innerHTML = '<i class="fas fa-times"></i> Select Email Account';
-    } else if (senderMode === 'manual') {
+        sendButton.classList.remove('btn-success');
+        sendButton.classList.add('btn-warning');
+    } else if (senderMode === 'manual' && selectedSender) {
         const option = document.querySelector(`#selected_sender option[value="${selectedSender}"]`);
-        const remaining = option ? option.getAttribute('data-remaining') : 0;
+        const remaining = option ? parseInt(option.getAttribute('data-remaining')) : 0;
         
-        if (remaining == 0) {
+        if (remaining === 0) {
             sendButton.disabled = true;
             sendButton.innerHTML = '<i class="fas fa-times"></i> Account Limit Reached';
+            sendButton.classList.remove('btn-success');
+            sendButton.classList.add('btn-danger');
         } else {
             sendButton.disabled = false;
             sendButton.innerHTML = '<i class="fas fa-paper-plane"></i> Send Bulk Emails';
+            sendButton.classList.remove('btn-warning', 'btn-danger');
+            sendButton.classList.add('btn-success');
         }
     } else {
+        // Auto mode or valid selection
         sendButton.disabled = false;
         sendButton.innerHTML = '<i class="fas fa-paper-plane"></i> Send Bulk Emails';
+        sendButton.classList.remove('btn-warning', 'btn-danger');
+        sendButton.classList.add('btn-success');
     }
 }
 
@@ -393,43 +405,81 @@ function updatePreview() {
     }
 }
 
+// Add form submit handler to ensure validation doesn't prevent submission
+function handleFormSubmit(event) {
+    const senderMode = document.getElementById('sender_mode').value;
+    const selectedSender = document.getElementById('selected_sender').value;
+    const sendButton = document.getElementById('sendButton');
+    
+    // Additional validation before form submission
+    if (senderMode === 'manual' && !selectedSender) {
+        event.preventDefault();
+        alert('Please select an email account for manual mode.');
+        return false;
+    }
+    
+    // Show loading state
+    if (sendButton) {
+        sendButton.disabled = true;
+        sendButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting Email Send...';
+    }
+    
+    return true;
+}
+
 // Add event listeners
 document.addEventListener('DOMContentLoaded', function() {
     updatePreview();
     
     // Add event listener for sender selection change
-    document.getElementById('selected_sender').addEventListener('change', validateForm);
-    document.getElementById('sender_mode').addEventListener('change', validateForm);
+    const selectedSenderEl = document.getElementById('selected_sender');
+    const senderModeEl = document.getElementById('sender_mode');
+    const formEl = document.querySelector('form');
+    
+    if (selectedSenderEl) {
+        selectedSenderEl.addEventListener('change', validateForm);
+    }
+    
+    if (senderModeEl) {
+        senderModeEl.addEventListener('change', validateForm);
+    }
+    
+    if (formEl) {
+        formEl.addEventListener('submit', handleFormSubmit);
+    }
     
     // Initial validation
     validateForm();
 });
 
 // Update preview as user types
-document.getElementById('template').addEventListener('input', updatePreview);
-
-// Preserve formatting when pasting
-document.getElementById('template').addEventListener('paste', function(e) {
-    // Allow default paste behavior to preserve formatting
-    setTimeout(updatePreview, 10);
-});
-
-// Handle tab key in textarea for better formatting
-document.getElementById('template').addEventListener('keydown', function(e) {
-    if (e.key === 'Tab') {
-        e.preventDefault();
-        const start = this.selectionStart;
-        const end = this.selectionEnd;
-        
-        // Insert tab character
-        this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
-        
-        // Move cursor after inserted tab
-        this.selectionStart = this.selectionEnd = start + 1;
-        
-        updatePreview();
-    }
-});
+const templateEl = document.getElementById('template');
+if (templateEl) {
+    templateEl.addEventListener('input', updatePreview);
+    
+    // Preserve formatting when pasting
+    templateEl.addEventListener('paste', function(e) {
+        // Allow default paste behavior to preserve formatting
+        setTimeout(updatePreview, 10);
+    });
+    
+    // Handle tab key in textarea for better formatting
+    templateEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = this.selectionStart;
+            const end = this.selectionEnd;
+            
+            // Insert tab character
+            this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
+            
+            // Move cursor after inserted tab
+            this.selectionStart = this.selectionEnd = start + 1;
+            
+            updatePreview();
+        }
+    });
+}
 </script>
 
 {% endblock %}
