@@ -43,6 +43,31 @@
                                 <th>Subject:</th>
                                 <td>{{ log.subject }}</td>
                             </tr>
+                            {% if log.cc_emails %}
+                            <tr>
+                                <th>CC Recipients:</th>
+                                <td>
+                                    <span class="badge bg-info">{{ log.cc_emails }}</span>
+                                </td>
+                            </tr>
+                            {% endif %}
+                            {% if log.bcc_emails %}
+                            <tr>
+                                <th>BCC Recipients:</th>
+                                <td>
+                                    <span class="badge bg-secondary">{{ log.bcc_emails }}</span>
+                                </td>
+                            </tr>
+                            {% endif %}
+                            {% if log.attachment_name %}
+                            <tr>
+                                <th>Attachment:</th>
+                                <td>
+                                    <i class="fas fa-paperclip text-warning me-2"></i>
+                                    <span class="badge bg-warning text-dark">{{ log.attachment_name }}</span>
+                                </td>
+                            </tr>
+                            {% endif %}
                         </table>
                     </div>
                     <div class="col-md-6">
@@ -70,6 +95,17 @@
                                     <span class="badge {% if success_rate >= 90 %}bg-success{% elif success_rate >= 70 %}bg-warning{% else %}bg-danger{% endif %}">
                                         {{ "%.1f"|format(success_rate) }}%
                                     </span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th>Features Used:</th>
+                                <td>
+                                    {% if log.cc_emails %}<span class="badge bg-info me-1">CC</span>{% endif %}
+                                    {% if log.bcc_emails %}<span class="badge bg-secondary me-1">BCC</span>{% endif %}
+                                    {% if log.attachment_name %}<span class="badge bg-warning text-dark me-1">Attachment</span>{% endif %}
+                                    {% if not log.cc_emails and not log.bcc_emails and not log.attachment_name %}
+                                        <span class="text-muted">Basic email only</span>
+                                    {% endif %}
                                 </td>
                             </tr>
                         </table>

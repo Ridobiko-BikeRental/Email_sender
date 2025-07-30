@@ -4,6 +4,9 @@ import smtplib
 import sqlite3
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
+from email.mime.base import MIMEBase
+from email import encoders
 from flask import Flask, render_template, request, flash, redirect, url_for, jsonify, session
 from werkzeug.utils import secure_filename
 import time
@@ -24,17 +27,21 @@ app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this-in-product
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
+ATTACHMENTS_FOLDER = 'attachments'
 ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
-MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
+ALLOWED_ATTACHMENT_EXTENSIONS = {'pdf', 'doc', 'docx', 'txt', 'jpg', 'jpeg', 'png', 'gif'}
+MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB max file size
 LOGS_FOLDER = 'logs'
 DATABASE_PATH = 'email_system.db'
 EMAIL_LIMIT_PER_ACCOUNT = 15  # Limit per account
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['ATTACHMENTS_FOLDER'] = ATTACHMENTS_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
 # Create folders if they don't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(ATTACHMENTS_FOLDER, exist_ok=True)
 os.makedirs(LOGS_FOLDER, exist_ok=True)
 
 # Set up logging
@@ -92,6 +99,9 @@ def init_database():
                 failed_count INTEGER,
                 duration_seconds REAL,
                 subject TEXT,
+                cc_emails TEXT,
+                bcc_emails TEXT,
+                attachment_name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 log_data TEXT
             )
@@ -128,7 +138,10 @@ email_status = {
     'sender_rotation': {},
     'start_time': None,
     'failed_emails': [],
-    'success_emails': []
+    'success_emails': [],
+    'attachment_name': None,
+    'cc_emails': [],
+    'bcc_emails': []
 }
 
 # Database functions
@@ -282,8 +295,9 @@ def save_email_log(log_data, log_filename):
             cursor.execute('''
                 INSERT INTO email_logs 
                 (log_filename, sender_email, sender_mode, total_emails, sent_count, 
-                 failed_count, duration_seconds, subject, log_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 failed_count, duration_seconds, subject, cc_emails, bcc_emails, 
+                 attachment_name, log_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 log_filename,
                 log_data.get('sender_email'),
@@ -293,6 +307,9 @@ def save_email_log(log_data, log_filename):
                 log_data.get('failed_count', 0),
                 log_data.get('duration_seconds', 0),
                 log_data.get('subject', ''),
+                ', '.join(log_data.get('cc_emails', [])),
+                ', '.join(log_data.get('bcc_emails', [])),
+                log_data.get('attachment_name', ''),
                 json.dumps(log_data)
             ))
             
@@ -343,6 +360,9 @@ class SimpleDataFrame:
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def allowed_attachment_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_ATTACHMENT_EXTENSIONS
 
 def read_csv_file(filepath):
     """Read CSV file"""
@@ -432,13 +452,27 @@ def format_email_content(content):
     
     return html_content
 
-def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recipient_email, subject, body):
-    """Send individual email via SMTP"""
+def parse_email_list(email_string):
+    """Parse comma-separated email addresses"""
+    if not email_string:
+        return []
+    
+    emails = [email.strip() for email in email_string.split(',') if email.strip()]
+    return emails
+
+def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recipient_email, subject, body, cc_emails=None, bcc_emails=None, attachment_path=None):
+    """Send individual email via SMTP with CC, BCC, and attachment support"""
     try:
         msg = MIMEMultipart('alternative')
         msg['From'] = sender_email
         msg['To'] = recipient_email
         msg['Subject'] = subject
+        
+        # Add CC recipients
+        if cc_emails:
+            msg['CC'] = ', '.join(cc_emails)
+        
+        # BCC is handled in sendmail, not in headers
         
         # Create plain text version (keep original formatting)
         text_part = MIMEText(body, 'plain', 'utf-8')
@@ -451,11 +485,42 @@ def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recip
         msg.attach(text_part)
         msg.attach(html_part)
         
+        # Add attachment if provided
+        if attachment_path and os.path.exists(attachment_path):
+            try:
+                with open(attachment_path, 'rb') as f:
+                    attachment_data = f.read()
+                
+                filename = os.path.basename(attachment_path)
+                
+                # Determine MIME type based on file extension
+                if filename.lower().endswith('.pdf'):
+                    attachment = MIMEApplication(attachment_data, _subtype='pdf')
+                else:
+                    attachment = MIMEBase('application', 'octet-stream')
+                    attachment.set_payload(attachment_data)
+                    encoders.encode_base64(attachment)
+                
+                attachment.add_header('Content-Disposition', f'attachment; filename={filename}')
+                msg.attach(attachment)
+                logger.info(f"Attached file: {filename}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to attach file {attachment_path}: {e}")
+        
+        # Prepare recipient list (To + CC + BCC)
+        all_recipients = [recipient_email]
+        if cc_emails:
+            all_recipients.extend(cc_emails)
+        if bcc_emails:
+            all_recipients.extend(bcc_emails)
+        
+        # Send email
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(sender_email, sender_password)
         text = msg.as_string()
-        server.sendmail(sender_email, recipient_email, text)
+        server.sendmail(sender_email, all_recipients, text)
         server.quit()
         
         # Update the account's sent count in database
@@ -475,7 +540,7 @@ def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recip
         logger.error(f"Failed to send email to {recipient_email} from {sender_email}: {error_msg}")
         return False, error_msg
 
-def send_bulk_emails(file_path, subject, template, email_column, delay=1):
+def send_bulk_emails(file_path, subject, template, email_column, delay=1, cc_emails=None, bcc_emails=None, attachment_path=None):
     """Send bulk emails in background with automatic sender rotation"""
     global email_status
     
@@ -483,6 +548,10 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
     accounts = get_email_accounts()
     if not accounts:
         return False, "No email accounts configured. Please add email accounts first."
+    
+    # Parse CC and BCC emails
+    cc_list = parse_email_list(cc_emails) if cc_emails else []
+    bcc_list = parse_email_list(bcc_emails) if bcc_emails else []
     
     # Reset status
     email_status.update({
@@ -495,7 +564,10 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
         'sender_rotation': {},
         'start_time': datetime.now(),
         'failed_emails': [],
-        'success_emails': []
+        'success_emails': [],
+        'attachment_name': os.path.basename(attachment_path) if attachment_path else None,
+        'cc_emails': cc_list,
+        'bcc_emails': bcc_list
     })
     
     df = read_file(file_path)
@@ -545,7 +617,7 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
         
         success, error_msg = send_email_smtp(
             smtp_server, smtp_port, current_sender, current_password,
-            recipient_email, subject, personalized_message
+            recipient_email, subject, personalized_message, cc_list, bcc_list, attachment_path
         )
         
         if success:
@@ -581,6 +653,9 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
         'subject': subject,
         'sender_mode': 'auto',
         'sender_rotation': email_status['sender_rotation'],
+        'cc_emails': cc_list,
+        'bcc_emails': bcc_list,
+        'attachment_name': os.path.basename(attachment_path) if attachment_path else '',
         'account_stats': get_account_stats()
     }
     
@@ -604,7 +679,7 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1):
         'sender_rotation': email_status['sender_rotation']
     }
 
-def send_bulk_emails_single_sender(file_path, sender_email, subject, template, email_column, delay=1):
+def send_bulk_emails_single_sender(file_path, sender_email, subject, template, email_column, delay=1, cc_emails=None, bcc_emails=None, attachment_path=None):
     """Send bulk emails using a single specific sender"""
     global email_status
     
@@ -627,6 +702,10 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
         
         sender_password = account['password']
     
+    # Parse CC and BCC emails
+    cc_list = parse_email_list(cc_emails) if cc_emails else []
+    bcc_list = parse_email_list(bcc_emails) if bcc_emails else []
+    
     # Reset status
     email_status.update({
         'is_sending': True,
@@ -638,7 +717,10 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
         'sender_rotation': {sender_email: 0},
         'start_time': datetime.now(),
         'failed_emails': [],
-        'success_emails': []
+        'success_emails': [],
+        'attachment_name': os.path.basename(attachment_path) if attachment_path else None,
+        'cc_emails': cc_list,
+        'bcc_emails': bcc_list
     })
     
     df = read_file(file_path)
@@ -679,7 +761,7 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
         
         success, error_msg = send_email_smtp(
             smtp_server, smtp_port, sender_email, sender_password,
-            recipient_email, subject, personalized_message
+            recipient_email, subject, personalized_message, cc_list, bcc_list, attachment_path
         )
         
         if success:
@@ -711,6 +793,9 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
         'sender_email': sender_email,
         'sender_mode': 'manual',
         'sender_rotation': email_status['sender_rotation'],
+        'cc_emails': cc_list,
+        'bcc_emails': bcc_list,
+        'attachment_name': os.path.basename(attachment_path) if attachment_path else '',
         'account_stats': get_account_stats()
     }
     
@@ -774,6 +859,33 @@ def upload_file():
         flash('Invalid file type. Please upload CSV or Excel files only.')
         return redirect(url_for('index'))
 
+@app.route('/upload_attachment', methods=['POST'])
+def upload_attachment():
+    """Handle attachment upload"""
+    if 'attachment' not in request.files:
+        return jsonify({'success': False, 'message': 'No file selected'})
+    
+    file = request.files['attachment']
+    if file.filename == '':
+        return jsonify({'success': False, 'message': 'No file selected'})
+    
+    if file and allowed_attachment_file(file.filename):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['ATTACHMENTS_FOLDER'], filename)
+        file.save(filepath)
+        
+        # Get file size in MB
+        file_size = os.path.getsize(filepath) / (1024 * 1024)
+        
+        return jsonify({
+            'success': True, 
+            'filename': filename,
+            'filepath': filepath,
+            'size': f"{file_size:.2f} MB"
+        })
+    else:
+        return jsonify({'success': False, 'message': 'Invalid file type. Allowed: PDF, DOC, DOCX, TXT, JPG, PNG, GIF'})
+
 @app.route('/send_emails', methods=['POST'])
 def send_emails():
     filename = request.form.get('filename')
@@ -783,9 +895,12 @@ def send_emails():
     template = request.form.get('template')
     email_column = request.form.get('email_column')
     delay = int(request.form.get('delay', 1))
+    cc_emails = request.form.get('cc_emails', '').strip()
+    bcc_emails = request.form.get('bcc_emails', '').strip()
+    attachment_filename = request.form.get('attachment_filename', '').strip()
     
     # Debug logging
-    logger.info(f"Form data received - filename: {filename}, sender_mode: {sender_mode}, selected_sender: '{selected_sender}', subject: {subject}, template length: {len(template) if template else 0}, email_column: {email_column}")
+    logger.info(f"Form data received - filename: {filename}, sender_mode: {sender_mode}, selected_sender: '{selected_sender}', subject: {subject}, template length: {len(template) if template else 0}, email_column: {email_column}, cc: {cc_emails}, bcc: {bcc_emails}, attachment: {attachment_filename}")
     
     # Validate all required fields
     if not all([filename, sender_mode, subject, template, email_column]):
@@ -840,18 +955,29 @@ def send_emails():
         logger.error(f"File not found: {filepath}")
         return redirect(url_for('index'))
     
+    # Handle attachment
+    attachment_path = None
+    if attachment_filename:
+        attachment_path = os.path.join(app.config['ATTACHMENTS_FOLDER'], attachment_filename)
+        if not os.path.exists(attachment_path):
+            flash('Attachment file not found. Please upload the attachment again.')
+            logger.error(f"Attachment not found: {attachment_path}")
+            return redirect(url_for('index'))
+    
     # Start sending emails in background thread
     def send_emails_task():
         try:
             if sender_mode == 'auto':
                 logger.info("Starting auto-rotate email sending")
                 success, result = send_bulk_emails(
-                    filepath, subject, template, email_column, delay
+                    filepath, subject, template, email_column, delay, 
+                    cc_emails, bcc_emails, attachment_path
                 )
             else:  # manual mode
                 logger.info(f"Starting manual email sending with sender: {selected_sender}")
                 success, result = send_bulk_emails_single_sender(
-                    filepath, selected_sender, subject, template, email_column, delay
+                    filepath, selected_sender, subject, template, email_column, delay,
+                    cc_emails, bcc_emails, attachment_path
                 )
             
             if success:
@@ -962,6 +1088,9 @@ def logs():
                 'failed_count': row['failed_count'],
                 'duration_seconds': row['duration_seconds'],
                 'subject': row['subject'],
+                'cc_emails': row['cc_emails'],
+                'bcc_emails': row['bcc_emails'],
+                'attachment_name': row['attachment_name'],
                 'created_at': row['created_at'],
                 'total_recipients': row['total_recipients'] or 0,
                 'successful_sends': row['successful_sends'] or 0,

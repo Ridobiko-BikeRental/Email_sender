@@ -18,9 +18,11 @@
                                     <th>Sender</th>
                                     <th>Mode</th>
                                     <th>Subject</th>
-                                    <th>Total Emails</th>
+                                    <th>Recipients</th>
                                     <th>Success</th>
                                     <th>Failed</th>
+                                    <th>CC/BCC</th>
+                                    <th>Attachment</th>
                                     <th>Duration</th>
                                     <th>Actions</th>
                                 </tr>
@@ -60,6 +62,20 @@
                                         <span class="badge {% if log.failed_count > 0 %}bg-danger{% else %}bg-secondary{% endif %}">
                                             {{ log.failed_count }}
                                         </span>
+                                    </td>
+                                    <td>
+                                        {% if log.cc_emails or log.bcc_emails %}
+                                            <i class="fas fa-check-circle text-success" title="CC: {{ log.cc_emails }}{% if log.bcc_emails %}, BCC: {{ log.bcc_emails }}{% endif %}"></i>
+                                        {% else %}
+                                            <i class="fas fa-minus text-muted"></i>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if log.attachment_name %}
+                                            <i class="fas fa-paperclip text-warning" title="{{ log.attachment_name }}"></i>
+                                        {% else %}
+                                            <i class="fas fa-minus text-muted"></i>
+                                        {% endif %}
                                     </td>
                                     <td>
                                         <span class="text-muted">

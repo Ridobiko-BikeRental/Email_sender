@@ -8,8 +8,9 @@
                 <h3><i class="fas fa-edit"></i> Compose Bulk Email</h3>
             </div>
             <div class="card-body">
-                <form action="{{ url_for('send_emails') }}" method="post">
+                <form action="{{ url_for('send_emails') }}" method="post" enctype="multipart/form-data">
                     <input type="hidden" name="filename" value="{{ filename }}">
+                    <input type="hidden" name="attachment_filename" id="attachment_filename" value="">
                     
                     <!-- Sender Selection -->
                     <div class="card mb-4">
@@ -49,47 +50,6 @@
                         </div>
                     </div>
 
-                    <!-- Account Status -->
-                    <div class="card mb-4">
-                        <div class="card-header bg-info text-white">
-                            <h5 class="mb-0"><i class="fas fa-users"></i> Email Account Status</h5>
-                        </div>
-                        <div class="card-body">
-                            {% if account_stats %}
-                                <div class="row">
-                                    {% for account in account_stats %}
-                                    <div class="col-md-6 mb-3">
-                                        <div class="card">
-                                            <div class="card-body">
-                                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                                    <h6 class="card-title mb-0">{{ account.email }}</h6>
-                                                    <span class="badge {% if account.remaining > 5 %}bg-success{% elif account.remaining > 0 %}bg-warning{% else %}bg-danger{% endif %}">
-                                                        {{ account.remaining }}/{{ account.limit }} remaining
-                                                    </span>
-                                                </div>
-                                                <div class="progress" style="height: 8px;">
-                                                    <div class="progress-bar {% if account.percentage_used < 70 %}bg-success{% elif account.percentage_used < 90 %}bg-warning{% else %}bg-danger{% endif %}" 
-                                                         style="width: {{ account.percentage_used }}%"></div>
-                                                </div>
-                                                <small class="text-muted">{{ account.sent_today }} emails sent today</small>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    {% endfor %}
-                                </div>
-                                <div class="alert alert-info mb-0">
-                                    <i class="fas fa-info-circle"></i> 
-                                    <strong>Daily Limits:</strong> Each account has a daily limit of 15 emails. Choose auto-rotate for best distribution or select a specific account.
-                                </div>
-                            {% else %}
-                                <div class="alert alert-danger">
-                                    <i class="fas fa-exclamation-triangle"></i> 
-                                    <strong>No email accounts configured!</strong> Please contact administrator to configure sender accounts.
-                                </div>
-                            {% endif %}
-                        </div>
-                    </div>
-
                     <!-- Email Configuration -->
                     <div class="card mb-4">
                         <div class="card-header bg-success text-white">
@@ -97,7 +57,7 @@
                         </div>
                         <div class="card-body">
                             <div class="mb-3">
-                                <label for="email_column" class="form-label">Email Column:</label>
+                                <label for="email_column" class="form-label">Email Column (TO):</label>
                                 <select class="form-select" id="email_column" name="email_column" required>
                                     <option value="">Select the column containing email addresses</option>
                                     {% for column in columns %}
@@ -107,6 +67,25 @@
                                         </option>
                                     {% endfor %}
                                 </select>
+                            </div>
+
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="cc_emails" class="form-label">CC Emails (Optional):</label>
+                                        <input type="text" class="form-control" id="cc_emails" name="cc_emails" 
+                                               placeholder="cc1@example.com, cc2@example.com">
+                                        <div class="form-text">Comma-separated emails to CC on all messages</div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="bcc_emails" class="form-label">BCC Emails (Optional):</label>
+                                        <input type="text" class="form-control" id="bcc_emails" name="bcc_emails" 
+                                               placeholder="bcc1@example.com, bcc2@example.com">
+                                        <div class="form-text">Comma-separated emails to BCC on all messages</div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="mb-3">
@@ -148,8 +127,74 @@ Your Team 😊"></textarea>
                             <div class="mb-3">
                                 <label for="delay" class="form-label">Delay between emails (seconds):</label>
                                 <input type="number" class="form-control" id="delay" name="delay" value="5" min="1" max="10">
-                                <div class="form-text">Recommended: 1-2 seconds to avoid being flagged as spam</div>
+                                <div class="form-text">Recommended: 3-5 seconds to avoid being flagged as spam</div>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Attachment Section -->
+                    <div class="card mb-4">
+                        <div class="card-header bg-warning text-white">
+                            <h5 class="mb-0"><i class="fas fa-paperclip"></i> Attachment (Optional)</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label for="attachment" class="form-label">Select Attachment:</label>
+                                <input type="file" class="form-control" id="attachment" accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif">
+                                <div class="form-text">Supported formats: PDF, DOC, DOCX, TXT, JPG, PNG, GIF (Max: 25MB)</div>
+                            </div>
+                            
+                            <div id="attachment-status" class="mt-3" style="display: none;">
+                                <div class="alert alert-info">
+                                    <i class="fas fa-paperclip"></i>
+                                    <strong>Attached:</strong> <span id="attachment-name"></span>
+                                    <span class="badge bg-secondary ms-2" id="attachment-size"></span>
+                                    <button type="button" class="btn btn-sm btn-outline-danger ms-2" onclick="removeAttachment()">
+                                        <i class="fas fa-times"></i> Remove
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Account Status -->
+                    <div class="card mb-4">
+                        <div class="card-header bg-info text-white">
+                            <h5 class="mb-0"><i class="fas fa-users"></i> Email Account Status</h5>
+                        </div>
+                        <div class="card-body">
+                            {% if account_stats %}
+                                <div class="row">
+                                    {% for account in account_stats %}
+                                    <div class="col-md-6 mb-3">
+                                        <div class="card">
+                                            <div class="card-body">
+                                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                                    <h6 class="card-title mb-0">{{ account.email }}</h6>
+                                                    <span class="badge {% if account.remaining > 5 %}bg-success{% elif account.remaining > 0 %}bg-warning{% else %}bg-danger{% endif %}">
+                                                        {{ account.remaining }}/{{ account.limit }} remaining
+                                                    </span>
+                                                </div>
+                                                <div class="progress" style="height: 8px;">
+                                                    <div class="progress-bar {% if account.percentage_used < 70 %}bg-success{% elif account.percentage_used < 90 %}bg-warning{% else %}bg-danger{% endif %}" 
+                                                         style="width: {{ account.percentage_used }}%"></div>
+                                                </div>
+                                                <small class="text-muted">{{ account.sent_today }} emails sent today</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                                <div class="alert alert-info mb-0">
+                                    <i class="fas fa-info-circle"></i> 
+                                    <strong>Daily Limits:</strong> Each account has a daily limit of 15 emails. Choose auto-rotate for best distribution or select a specific account.
+                                </div>
+                            {% else %}
+                                <div class="alert alert-danger">
+                                    <i class="fas fa-exclamation-triangle"></i> 
+                                    <strong>No email accounts configured!</strong> Please <a href="{{ url_for('manage_accounts') }}" class="alert-link">add email accounts</a> to continue.
+                                </div>
+                            {% endif %}
                         </div>
                     </div>
 
@@ -158,9 +203,9 @@ Your Team 😊"></textarea>
                         <i class="fas fa-paper-plane"></i> Send Bulk Emails
                     </button>
                     {% else %}
-                    <button type="button" class="btn btn-secondary btn-lg" disabled>
-                        <i class="fas fa-times"></i> No Email Accounts Available
-                    </button>
+                    <a href="{{ url_for('manage_accounts') }}" class="btn btn-primary btn-lg">
+                        <i class="fas fa-plus"></i> Add Email Accounts First
+                    </a>
                     {% endif %}
                 </form>
             </div>
@@ -212,16 +257,16 @@ Your Team 😊"></textarea>
 
         <div class="card mt-3">
             <div class="card-header">
-                <h5><i class="fas fa-lightbulb"></i> Tips</h5>
+                <h5><i class="fas fa-lightbulb"></i> New Features</h5>
             </div>
             <div class="card-body">
                 <ul class="list-unstyled mb-0">
-                    <li><i class="fas fa-check text-success"></i> Use placeholders like <code>{Name}</code> for personalization</li>
-                    <li><i class="fas fa-check text-success"></i> Formatting (spaces, line breaks, bullets) is preserved</li>
-                    <li><i class="fas fa-check text-success"></i> Emojis are fully supported 😊</li>
-                    <li><i class="fas fa-check text-success"></i> Auto-rotate for optimal distribution</li>
-                    <li><i class="fas fa-check text-success"></i> 15 email limit per account per day</li>
-                    <li><i class="fas fa-check text-success"></i> Check spam folder if emails don't arrive</li>
+                    <li><i class="fas fa-check text-success"></i> <strong>PDF Attachments:</strong> Attach files to all emails</li>
+                    <li><i class="fas fa-check text-success"></i> <strong>CC/BCC Support:</strong> Carbon copy recipients</li>
+                    <li><i class="fas fa-check text-success"></i> <strong>Multiple File Types:</strong> PDF, DOC, images supported</li>
+                    <li><i class="fas fa-check text-success"></i> <strong>Database Storage:</strong> All logs and accounts saved</li>
+                    <li><i class="fas fa-check text-success"></i> <strong>Enhanced Security:</strong> Improved email handling</li>
+                    <li><i class="fas fa-check text-success"></i> <strong>Better Tracking:</strong> Detailed success/failure reports</li>
                 </ul>
             </div>
         </div>
@@ -299,6 +344,26 @@ Your Team 😊"></textarea>
 .template-editor:focus {
     border-color: #28a745;
     box-shadow: 0 0 0 0.2rem rgba(40, 167, 69, 0.25);
+}
+
+/* Upload area styling */
+.form-control[type="file"] {
+    padding: 0.375rem 0.75rem;
+}
+
+.card-header {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+}
+
+/* Progress bar animations */
+.progress-bar {
+    transition: width 0.6s ease;
+}
+
+/* Button loading state */
+.btn[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 </style>
 
@@ -405,6 +470,69 @@ function updatePreview() {
     }
 }
 
+// Handle attachment upload
+function handleAttachmentUpload() {
+    const fileInput = document.getElementById('attachment');
+    const file = fileInput.files[0];
+    
+    if (!file) return;
+    
+    // Check file size (25MB limit)
+    if (file.size > 25 * 1024 * 1024) {
+        alert('File size must be less than 25MB');
+        fileInput.value = '';
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('attachment', file);
+    
+    // Show loading state
+    const statusDiv = document.getElementById('attachment-status');
+    statusDiv.style.display = 'block';
+    statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin"></i> Uploading...</div>';
+    
+    fetch('/upload_attachment', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            document.getElementById('attachment_filename').value = data.filename;
+            document.getElementById('attachment-name').textContent = data.filename;
+            document.getElementById('attachment-size').textContent = data.size;
+            statusDiv.innerHTML = `
+                <div class="alert alert-success">
+                    <i class="fas fa-paperclip"></i>
+                    <strong>Attached:</strong> <span id="attachment-name">${data.filename}</span>
+                    <span class="badge bg-secondary ms-2" id="attachment-size">${data.size}</span>
+                    <button type="button" class="btn btn-sm btn-outline-danger ms-2" onclick="removeAttachment()">
+                        <i class="fas fa-times"></i> Remove
+                    </button>
+                </div>
+            `;
+        } else {
+            statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> ${data.message}</div>`;
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 3000);
+        }
+    })
+    .catch(error => {
+        statusDiv.innerHTML = '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> Upload failed</div>';
+        setTimeout(() => {
+            statusDiv.style.display = 'none';
+        }, 3000);
+    });
+}
+
+function removeAttachment() {
+    document.getElementById('attachment').value = '';
+    document.getElementById('attachment_filename').value = '';
+    document.getElementById('attachment-status').style.display = 'none';
+}
+
 // Add form submit handler to ensure validation doesn't prevent submission
 function handleFormSubmit(event) {
     const senderMode = document.getElementById('sender_mode').value;
@@ -435,6 +563,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const selectedSenderEl = document.getElementById('selected_sender');
     const senderModeEl = document.getElementById('sender_mode');
     const formEl = document.querySelector('form');
+    const attachmentInput = document.getElementById('attachment');
     
     if (selectedSenderEl) {
         selectedSenderEl.addEventListener('change', validateForm);
@@ -446,6 +575,10 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (formEl) {
         formEl.addEventListener('submit', handleFormSubmit);
+    }
+    
+    if (attachmentInput) {
+        attachmentInput.addEventListener('change', handleAttachmentUpload);
     }
     
     // Initial validation
