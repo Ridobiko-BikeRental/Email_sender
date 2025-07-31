@@ -73,7 +73,7 @@ def init_database():
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
-        # Create email accounts table
+        # Create email accounts table with default CC/BCC columns
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS email_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,10 +82,23 @@ def init_database():
                 is_active BOOLEAN DEFAULT 1,
                 sent_count INTEGER DEFAULT 0,
                 last_reset DATE DEFAULT CURRENT_DATE,
+                default_cc TEXT DEFAULT '',
+                default_bcc TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Add default_cc and default_bcc columns if they don't exist (for existing databases)
+        try:
+            cursor.execute('ALTER TABLE email_accounts ADD COLUMN default_cc TEXT DEFAULT ""')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        try:
+            cursor.execute('ALTER TABLE email_accounts ADD COLUMN default_bcc TEXT DEFAULT ""')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         
         # Create email logs table
         cursor.execute('''
@@ -150,22 +163,35 @@ def get_email_accounts():
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT id, email, password, is_active, sent_count, last_reset, created_at 
+            SELECT id, email, password, is_active, sent_count, last_reset, 
+                   default_cc, default_bcc, created_at 
             FROM email_accounts 
             WHERE is_active = 1 
             ORDER BY created_at
         ''')
         return cursor.fetchall()
 
-def add_email_account(email, password):
+def get_all_email_accounts():
+    """Get all email accounts including inactive ones"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, email, password, is_active, sent_count, last_reset, 
+                   default_cc, default_bcc, created_at 
+            FROM email_accounts 
+            ORDER BY created_at
+        ''')
+        return cursor.fetchall()
+
+def add_email_account(email, password, default_cc='', default_bcc=''):
     """Add new email account to database"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO email_accounts (email, password) 
-                VALUES (?, ?)
-            ''', (email, password))
+                INSERT INTO email_accounts (email, password, default_cc, default_bcc) 
+                VALUES (?, ?, ?, ?)
+            ''', (email, password, default_cc, default_bcc))
             conn.commit()
             logger.info(f"Added email account: {email}")
             return True, "Email account added successfully"
@@ -175,16 +201,17 @@ def add_email_account(email, password):
         logger.error(f"Error adding email account: {e}")
         return False, f"Error adding email account: {str(e)}"
 
-def update_email_account(account_id, email, password, is_active):
+def update_email_account(account_id, email, password, is_active, default_cc='', default_bcc=''):
     """Update email account in database"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 UPDATE email_accounts 
-                SET email = ?, password = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+                SET email = ?, password = ?, is_active = ?, default_cc = ?, default_bcc = ?, 
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            ''', (email, password, is_active, account_id))
+            ''', (email, password, is_active, default_cc, default_bcc, account_id))
             conn.commit()
             logger.info(f"Updated email account ID: {account_id}")
             return True, "Email account updated successfully"
@@ -206,6 +233,20 @@ def delete_email_account(account_id):
     except Exception as e:
         logger.error(f"Error deleting email account: {e}")
         return False, f"Error deleting email account: {str(e)}"
+
+def get_account_default_cc_bcc(sender_email):
+    """Get default CC and BCC for a specific account"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT default_cc, default_bcc 
+            FROM email_accounts 
+            WHERE email = ? AND is_active = 1
+        ''', (sender_email,))
+        result = cursor.fetchone()
+        if result:
+            return result['default_cc'] or '', result['default_bcc'] or ''
+        return '', ''
 
 def reset_daily_counts():
     """Reset email counts daily"""
@@ -230,7 +271,7 @@ def get_available_sender():
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT email, password FROM email_accounts 
+            SELECT email, password, default_cc, default_bcc FROM email_accounts 
             WHERE is_active = 1 AND sent_count < ? 
             ORDER BY sent_count ASC, created_at ASC 
             LIMIT 1
@@ -238,11 +279,11 @@ def get_available_sender():
         
         result = cursor.fetchone()
         if result:
-            return result['email'], result['password']
+            return result['email'], result['password'], result['default_cc'], result['default_bcc']
         
         # If all accounts have reached the limit, return the first active one
         cursor.execute('''
-            SELECT email, password FROM email_accounts 
+            SELECT email, password, default_cc, default_bcc FROM email_accounts 
             WHERE is_active = 1 
             ORDER BY created_at ASC 
             LIMIT 1
@@ -251,9 +292,9 @@ def get_available_sender():
         result = cursor.fetchone()
         if result:
             logger.warning(f"All accounts have reached daily limit. Using {result['email']}")
-            return result['email'], result['password']
+            return result['email'], result['password'], result['default_cc'], result['default_bcc']
     
-    return None, None
+    return None, None, None, None
 
 def get_account_stats():
     """Get statistics for all email accounts"""
@@ -262,7 +303,7 @@ def get_account_stats():
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT id, email, sent_count, is_active, created_at
+            SELECT id, email, sent_count, is_active, default_cc, default_bcc, created_at
             FROM email_accounts 
             ORDER BY created_at
         ''')
@@ -280,6 +321,8 @@ def get_account_stats():
                 'limit': EMAIL_LIMIT_PER_ACCOUNT,
                 'percentage_used': (account['sent_count'] / EMAIL_LIMIT_PER_ACCOUNT) * 100,
                 'is_active': account['is_active'],
+                'default_cc': account['default_cc'] or '',
+                'default_bcc': account['default_bcc'] or '',
                 'created_at': account['created_at']
             })
         
@@ -460,6 +503,20 @@ def parse_email_list(email_string):
     emails = [email.strip() for email in email_string.split(',') if email.strip()]
     return emails
 
+def merge_cc_bcc_lists(form_cc, form_bcc, default_cc, default_bcc):
+    """Merge form CC/BCC with default CC/BCC, removing duplicates"""
+    # Parse all email lists
+    form_cc_list = parse_email_list(form_cc) if form_cc else []
+    form_bcc_list = parse_email_list(form_bcc) if form_bcc else []
+    default_cc_list = parse_email_list(default_cc) if default_cc else []
+    default_bcc_list = parse_email_list(default_bcc) if default_bcc else []
+    
+    # Merge and remove duplicates while preserving order
+    merged_cc = list(dict.fromkeys(form_cc_list + default_cc_list))
+    merged_bcc = list(dict.fromkeys(form_bcc_list + default_bcc_list))
+    
+    return merged_cc, merged_bcc
+
 def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recipient_email, subject, body, cc_emails=None, bcc_emails=None, attachment_path=None):
     """Send individual email via SMTP with CC, BCC, and attachment support"""
     try:
@@ -549,9 +606,9 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1, cc_ema
     if not accounts:
         return False, "No email accounts configured. Please add email accounts first."
     
-    # Parse CC and BCC emails
-    cc_list = parse_email_list(cc_emails) if cc_emails else []
-    bcc_list = parse_email_list(bcc_emails) if bcc_emails else []
+    # Parse CC and BCC emails from form
+    form_cc_list = parse_email_list(cc_emails) if cc_emails else []
+    form_bcc_list = parse_email_list(bcc_emails) if bcc_emails else []
     
     # Reset status
     email_status.update({
@@ -566,8 +623,8 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1, cc_ema
         'failed_emails': [],
         'success_emails': [],
         'attachment_name': os.path.basename(attachment_path) if attachment_path else None,
-        'cc_emails': cc_list,
-        'bcc_emails': bcc_list
+        'cc_emails': form_cc_list,
+        'bcc_emails': form_bcc_list
     })
     
     df = read_file(file_path)
@@ -590,6 +647,8 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1, cc_ema
     
     current_sender = None
     current_password = None
+    current_default_cc = None
+    current_default_bcc = None
     emails_sent_with_current = 0
     
     for index, row in enumerate(valid_emails):
@@ -598,7 +657,7 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1, cc_ema
         
         # Get next available sender if current one reached limit or is None
         if (current_sender is None or emails_sent_with_current >= EMAIL_LIMIT_PER_ACCOUNT):
-            current_sender, current_password = get_available_sender()
+            current_sender, current_password, current_default_cc, current_default_bcc = get_available_sender()
             emails_sent_with_current = 0
             
             if current_sender is None:
@@ -606,6 +665,11 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1, cc_ema
                 break
         
         email_status['current_sender'] = current_sender
+        
+        # Merge form CC/BCC with default CC/BCC for current sender
+        merged_cc, merged_bcc = merge_cc_bcc_lists(
+            cc_emails, bcc_emails, current_default_cc, current_default_bcc
+        )
         
         # Replace placeholders in template with row data
         personalized_message = template
@@ -617,7 +681,7 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1, cc_ema
         
         success, error_msg = send_email_smtp(
             smtp_server, smtp_port, current_sender, current_password,
-            recipient_email, subject, personalized_message, cc_list, bcc_list, attachment_path
+            recipient_email, subject, personalized_message, merged_cc, merged_bcc, attachment_path
         )
         
         if success:
@@ -653,8 +717,8 @@ def send_bulk_emails(file_path, subject, template, email_column, delay=1, cc_ema
         'subject': subject,
         'sender_mode': 'auto',
         'sender_rotation': email_status['sender_rotation'],
-        'cc_emails': cc_list,
-        'bcc_emails': bcc_list,
+        'cc_emails': form_cc_list,
+        'bcc_emails': form_bcc_list,
         'attachment_name': os.path.basename(attachment_path) if attachment_path else '',
         'account_stats': get_account_stats()
     }
@@ -687,7 +751,7 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT email, password, sent_count, is_active 
+            SELECT email, password, sent_count, is_active, default_cc, default_bcc
             FROM email_accounts 
             WHERE email = ? AND is_active = 1
         ''', (sender_email,))
@@ -701,10 +765,11 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
             return False, f"Selected account has reached daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails"
         
         sender_password = account['password']
+        default_cc = account['default_cc'] or ''
+        default_bcc = account['default_bcc'] or ''
     
-    # Parse CC and BCC emails
-    cc_list = parse_email_list(cc_emails) if cc_emails else []
-    bcc_list = parse_email_list(bcc_emails) if bcc_emails else []
+    # Merge form CC/BCC with default CC/BCC
+    merged_cc, merged_bcc = merge_cc_bcc_lists(cc_emails, bcc_emails, default_cc, default_bcc)
     
     # Reset status
     email_status.update({
@@ -719,8 +784,8 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
         'failed_emails': [],
         'success_emails': [],
         'attachment_name': os.path.basename(attachment_path) if attachment_path else None,
-        'cc_emails': cc_list,
-        'bcc_emails': bcc_list
+        'cc_emails': merged_cc,
+        'bcc_emails': merged_bcc
     })
     
     df = read_file(file_path)
@@ -761,7 +826,7 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
         
         success, error_msg = send_email_smtp(
             smtp_server, smtp_port, sender_email, sender_password,
-            recipient_email, subject, personalized_message, cc_list, bcc_list, attachment_path
+            recipient_email, subject, personalized_message, merged_cc, merged_bcc, attachment_path
         )
         
         if success:
@@ -793,8 +858,8 @@ def send_bulk_emails_single_sender(file_path, sender_email, subject, template, e
         'sender_email': sender_email,
         'sender_mode': 'manual',
         'sender_rotation': email_status['sender_rotation'],
-        'cc_emails': cc_list,
-        'bcc_emails': bcc_list,
+        'cc_emails': merged_cc,
+        'bcc_emails': merged_bcc,
         'attachment_name': os.path.basename(attachment_path) if attachment_path else '',
         'account_stats': get_account_stats()
     }
@@ -1015,12 +1080,14 @@ def add_account():
     """Add new email account"""
     email = request.form.get('email', '').strip()
     password = request.form.get('password', '').strip()
+    default_cc = request.form.get('default_cc', '').strip()
+    default_bcc = request.form.get('default_bcc', '').strip()
     
     if not email or not password:
         flash('Email and password are required.')
         return redirect(url_for('manage_accounts'))
     
-    success, message = add_email_account(email, password)
+    success, message = add_email_account(email, password, default_cc, default_bcc)
     flash(message)
     return redirect(url_for('manage_accounts'))
 
@@ -1030,12 +1097,14 @@ def update_account(account_id):
     email = request.form.get('email', '').strip()
     password = request.form.get('password', '').strip()
     is_active = request.form.get('is_active') == 'on'
+    default_cc = request.form.get('default_cc', '').strip()
+    default_bcc = request.form.get('default_bcc', '').strip()
     
     if not email or not password:
         flash('Email and password are required.')
         return redirect(url_for('manage_accounts'))
     
-    success, message = update_email_account(account_id, email, password, is_active)
+    success, message = update_email_account(account_id, email, password, is_active, default_cc, default_bcc)
     flash(message)
     return redirect(url_for('manage_accounts'))
 

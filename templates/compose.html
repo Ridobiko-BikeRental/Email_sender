@@ -31,13 +31,15 @@
                             <div id="manual-sender-section" style="display: none;">
                                 <div class="mb-3">
                                     <label for="selected_sender" class="form-label">Select Email Account:</label>
-                                    <select class="form-select" id="selected_sender" name="selected_sender">
+                                    <select class="form-select" id="selected_sender" name="selected_sender" onchange="updateDefaultCcBcc()">
                                         <option value="">Choose an email account</option>
                                         {% for account in account_stats %}
                                         <option value="{{ account.email }}" 
                                                 {% if account.remaining == 0 %}disabled{% endif %}
                                                 data-remaining="{{ account.remaining }}"
-                                                data-sent="{{ account.sent_today }}">
+                                                data-sent="{{ account.sent_today }}"
+                                                data-default-cc="{{ account.default_cc or '' }}"
+                                                data-default-bcc="{{ account.default_bcc or '' }}">
                                             {{ account.email }} 
                                             ({{ account.remaining }}/{{ account.limit }} remaining)
                                             {% if account.remaining == 0 %} - LIMIT REACHED{% endif %}
@@ -45,6 +47,29 @@
                                         {% endfor %}
                                     </select>
                                     <div class="form-text">Select a specific account to send all emails from</div>
+                                </div>
+
+                                <!-- Default CC/BCC Info Display -->
+                                <div id="account-defaults-info" style="display: none;">
+                                    <div class="alert alert-info">
+                                        <h6><i class="fas fa-info-circle"></i> Account Default Recipients:</h6>
+                                        <div id="default-cc-display" style="display: none;">
+                                            <strong>Default CC:</strong> <span id="default-cc-text"></span>
+                                        </div>
+                                        <div id="default-bcc-display" style="display: none;">
+                                            <strong>Default BCC:</strong> <span id="default-bcc-text"></span>
+                                        </div>
+                                        <small class="text-muted">These will be automatically merged with any CC/BCC you specify below.</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Auto-mode CC/BCC info -->
+                            <div id="auto-mode-defaults" style="display: none;">
+                                <div class="alert alert-warning">
+                                    <h6><i class="fas fa-info-circle"></i> Auto-rotate Mode:</h6>
+                                    <p class="mb-1">Each account will use its own default CC/BCC settings plus any additional recipients you specify below.</p>
+                                    <small class="text-muted">View individual account defaults in <a href="{{ url_for('manage_accounts') }}" target="_blank">Account Management</a>.</small>
                                 </div>
                             </div>
                         </div>
@@ -72,18 +97,28 @@
                             <div class="row">
                                 <div class="col-md-6">
                                     <div class="mb-3">
-                                        <label for="cc_emails" class="form-label">CC Emails (Optional):</label>
+                                        <label for="cc_emails" class="form-label">Additional CC Emails:</label>
                                         <input type="text" class="form-control" id="cc_emails" name="cc_emails" 
                                                placeholder="cc1@example.com, cc2@example.com">
-                                        <div class="form-text">Comma-separated emails to CC on all messages</div>
+                                        <div class="form-text">
+                                            <span id="cc-help-text">Comma-separated emails to CC on all messages</span>
+                                            <div id="cc-merge-info" style="display: none;" class="text-info">
+                                                <small><i class="fas fa-plus"></i> Will be merged with account default CC</small>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="col-md-6">
                                     <div class="mb-3">
-                                        <label for="bcc_emails" class="form-label">BCC Emails (Optional):</label>
+                                        <label for="bcc_emails" class="form-label">Additional BCC Emails:</label>
                                         <input type="text" class="form-control" id="bcc_emails" name="bcc_emails" 
                                                placeholder="bcc1@example.com, bcc2@example.com">
-                                        <div class="form-text">Comma-separated emails to BCC on all messages</div>
+                                        <div class="form-text">
+                                            <span id="bcc-help-text">Comma-separated emails to BCC on all messages</span>
+                                            <div id="bcc-merge-info" style="display: none;" class="text-info">
+                                                <small><i class="fas fa-plus"></i> Will be merged with account default BCC</small>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -157,236 +192,339 @@ Your Team 😊"></textarea>
                         </div>
                     </div>
 
-                    <!-- Account Status -->
-                    <div class="card mb-4">
+                    <!-- Final Recipients Summary -->
+                    <div class="card mb-4" id="recipients-summary" style="display: none;">
                         <div class="card-header bg-info text-white">
-                            <h5 class="mb-0"><i class="fas fa-users"></i> Email Account Status</h5>
+                            <h5 class="mb-0"><i class="fas fa-users"></i> Final Recipients Summary</h5>
                         </div>
                         <div class="card-body">
-                            {% if account_stats %}
-                                <div class="row">
-                                    {% for account in account_stats %}
-                                    <div class="col-md-6 mb-3">
-                                        <div class="card">
-                                            <div class="card-body">
-                                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                                    <h6 class="card-title mb-0">{{ account.email }}</h6>
-                                                    <span class="badge {% if account.remaining > 5 %}bg-success{% elif account.remaining > 0 %}bg-warning{% else %}bg-danger{% endif %}">
-                                                        {{ account.remaining }}/{{ account.limit }} remaining
-                                                    </span>
-                                                </div>
-                                                <div class="progress" style="height: 8px;">
-                                                    <div class="progress-bar {% if account.percentage_used < 70 %}bg-success{% elif account.percentage_used < 90 %}bg-warning{% else %}bg-danger{% endif %}" 
-                                                         style="width: {{ account.percentage_used }}%"></div>
-                                                </div>
-                                                <small class="text-muted">{{ account.sent_today }} emails sent today</small>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    {% endfor %}
-                                </div>
-                                <div class="alert alert-info mb-0">
-                                    <i class="fas fa-info-circle"></i> 
-                                    <strong>Daily Limits:</strong> Each account has a daily limit of 15 emails. Choose auto-rotate for best distribution or select a specific account.
-                                </div>
-                            {% else %}
-                                <div class="alert alert-danger">
-                                    <i class="fas fa-exclamation-triangle"></i> 
-                                    <strong>No email accounts configured!</strong> Please <a href="{{ url_for('manage_accounts') }}" class="alert-link">add email accounts</a> to continue.
-                                </div>
-                            {% endif %}
+                            <div id="final-recipients-content">
+                                <!-- Dynamic content populated by JavaScript -->
+                            </div>
                         </div>
                     </div>
 
-                    {% if account_stats %}
-                    <button type="submit" class="btn btn-success btn-lg" id="sendButton">
-                        <i class="fas fa-paper-plane"></i> Send Bulk Emails
-                    </button>
-                    {% else %}
-                    <a href="{{ url_for('manage_accounts') }}" class="btn btn-primary btn-lg">
-                        <i class="fas fa-plus"></i> Add Email Accounts First
-                    </a>
-                    {% endif %}
+                    <!-- Submit Section -->
+                    <div class="text-center">
+                        {% if account_stats %}
+                            <button type="submit" class="btn btn-success btn-lg" id="sendButton">
+                                <i class="fas fa-paper-plane"></i> Send Bulk Emails
+                            </button>
+                        {% else %}
+                            <div class="alert alert-warning">
+                                <h5><i class="fas fa-exclamation-triangle"></i> No Email Accounts Configured</h5>
+                                <p>You need to add at least one email account before sending bulk emails.</p>
+                                <a href="{{ url_for('manage_accounts') }}" class="btn btn-primary">
+                                    <i class="fas fa-plus"></i> Add Email Account
+                                </a>
+                            </div>
+                        {% endif %}
+                    </div>
                 </form>
             </div>
         </div>
     </div>
 
     <div class="col-md-4">
+        <!-- Sample Data Preview -->
         <div class="card">
-            <div class="card-header">
-                <h5><i class="fas fa-table"></i> File Preview</h5>
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="fas fa-table"></i> Sample Data Preview</h5>
             </div>
             <div class="card-body">
-                <div class="preview-table">
-                    <table class="table table-sm table-striped">
-                        <thead>
-                            <tr>
-                                {% for column in columns %}
-                                <th>{{ column }}</th>
+                {% if sample_data %}
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    {% for column in columns %}
+                                        <th>{{ column }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in sample_data %}
+                                <tr>
+                                    {% for column in columns %}
+                                        <td>{{ row[column] or '' }}</td>
+                                    {% endfor %}
+                                </tr>
                                 {% endfor %}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for row in sample_data[:5] %}
-                            <tr>
-                                {% for column in columns %}
-                                <td>{{ row[column] if row[column] else '' }}</td>
-                                {% endfor %}
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                    {% if sample_data|length > 5 %}
-                    <p class="text-muted small">Showing first 5 rows of {{ sample_data|length }} total records</p>
-                    {% endif %}
-                </div>
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="text-muted">No sample data available</p>
+                {% endif %}
             </div>
         </div>
 
-        <div class="card mt-3">
-            <div class="card-header">
-                <h5><i class="fas fa-eye"></i> Preview</h5>
+        <!-- Account Summary -->
+        {% if account_stats %}
+        <div class="card mt-4">
+            <div class="card-header bg-secondary text-white">
+                <h5 class="mb-0"><i class="fas fa-chart-bar"></i> Account Summary</h5>
             </div>
             <div class="card-body">
-                <div class="preview-content" id="email-preview">
-                    <div class="text-muted">Email preview will appear here as you type...</div>
+                <div class="row text-center">
+                    <div class="col-6">
+                        <h4 class="text-success">{{ account_stats|selectattr("is_active")|list|length }}</h4>
+                        <small>Active Accounts</small>
+                    </div>
+                    <div class="col-6">
+                        <h4 class="text-info">{{ account_stats|selectattr("is_active")|sum(attribute='remaining') }}</h4>
+                        <small>Total Remaining</small>
+                    </div>
+                </div>
+                
+                <hr>
+                
+                <div class="account-list">
+                    {% for account in account_stats %}
+                        {% if account.is_active %}
+                        <div class="account-item mb-2 p-2 border rounded">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>{{ account.email }}</strong>
+                                    <div class="small text-muted">
+                                        {{ account.sent_today }}/{{ account.limit }} used
+                                        {% if account.default_cc or account.default_bcc %}
+                                            <br>
+                                            {% if account.default_cc %}
+                                                <i class="fas fa-copy text-primary" title="Default CC"></i>
+                                            {% endif %}
+                                            {% if account.default_bcc %}
+                                                <i class="fas fa-eye-slash text-secondary" title="Default BCC"></i>
+                                            {% endif %}
+                                            <span class="text-info">Has defaults</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="text-end">
+                                    <div class="progress" style="width: 60px; height: 8px;">
+                                        <div class="progress-bar {% if account.percentage_used < 70 %}bg-success{% elif account.percentage_used < 90 %}bg-warning{% else %}bg-danger{% endif %}" 
+                                             style="width: {{ account.percentage_used }}%"></div>
+                                    </div>
+                                    <small class="text-{% if account.remaining > 5 %}success{% elif account.remaining > 0 %}warning{% else %}danger{% endif %}">
+                                        {{ account.remaining }} left
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% endfor %}
                 </div>
             </div>
         </div>
+        {% endif %}
 
-        <div class="card mt-3">
-            <div class="card-header">
-                <h5><i class="fas fa-lightbulb"></i> New Features</h5>
+        <!-- Email Preview -->
+        <div class="card mt-4">
+            <div class="card-header bg-warning text-white">
+                <h5 class="mb-0"><i class="fas fa-eye"></i> Email Preview</h5>
             </div>
             <div class="card-body">
-                <ul class="list-unstyled mb-0">
-                    <li><i class="fas fa-check text-success"></i> <strong>PDF Attachments:</strong> Attach files to all emails</li>
-                    <li><i class="fas fa-check text-success"></i> <strong>CC/BCC Support:</strong> Carbon copy recipients</li>
-                    <li><i class="fas fa-check text-success"></i> <strong>Multiple File Types:</strong> PDF, DOC, images supported</li>
-                    <li><i class="fas fa-check text-success"></i> <strong>Database Storage:</strong> All logs and accounts saved</li>
-                    <li><i class="fas fa-check text-success"></i> <strong>Enhanced Security:</strong> Improved email handling</li>
-                    <li><i class="fas fa-check text-success"></i> <strong>Better Tracking:</strong> Detailed success/failure reports</li>
-                </ul>
+                <div id="preview-content">
+                    <p class="text-muted">Enter a subject and template to see preview</p>
+                </div>
+                <div class="mt-3">
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="updatePreview()">
+                        <i class="fas fa-refresh"></i> Update Preview
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
-<style>
-.template-editor {
-    min-height: 250px;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    resize: vertical;
-}
-
-.placeholder-tag {
-    display: inline-block;
-    background: #e9ecef;
-    border: 1px solid #ced4da;
-    border-radius: 3px;
-    padding: 2px 6px;
-    margin: 2px;
-    cursor: pointer;
-    font-size: 0.85em;
-    transition: all 0.2s ease;
-}
-
-.placeholder-tag:hover {
-    background: #007bff;
-    color: white;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,123,255,0.3);
-}
-
-.preview-table {
-    max-height: 300px;
-    overflow: auto;
-}
-
-.preview-table table {
-    font-size: 0.8em;
-}
-
-.preview-content {
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-    padding: 15px;
-    min-height: 120px;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    max-height: 300px;
-    overflow-y: auto;
-}
-
-.preview-content.has-content {
-    background: white;
-    border-color: #28a745;
-}
-
-/* Ensure emojis display properly */
-.template-editor, .preview-content {
-    font-feature-settings: "liga" 1, "kern" 1;
-    -webkit-font-feature-settings: "liga" 1, "kern" 1;
-    -moz-font-feature-settings: "liga" 1, "kern" 1;
-    text-rendering: optimizeLegibility;
-}
-
-/* Preserve formatting in textarea */
-.template-editor:focus {
-    border-color: #28a745;
-    box-shadow: 0 0 0 0.2rem rgba(40, 167, 69, 0.25);
-}
-
-/* Upload area styling */
-.form-control[type="file"] {
-    padding: 0.375rem 0.75rem;
-}
-
-.card-header {
-    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
-}
-
-/* Progress bar animations */
-.progress-bar {
-    transition: width 0.6s ease;
-}
-
-/* Button loading state */
-.btn[disabled] {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-</style>
-
 <script>
 // Define columns and sample data globally
 const columns = {{ columns | tojson }};
 const sampleData = {% if sample_data and sample_data|length > 0 %}{{ sample_data[0] | tojson }}{% else %}{}{% endif %};
+const accountStats = {{ account_stats | tojson }};
 
 function toggleSenderOptions() {
     const senderMode = document.getElementById('sender_mode').value;
     const manualSection = document.getElementById('manual-sender-section');
+    const autoDefaults = document.getElementById('auto-mode-defaults');
     const selectedSender = document.getElementById('selected_sender');
     
     if (senderMode === 'manual') {
         manualSection.style.display = 'block';
+        autoDefaults.style.display = 'none';
         selectedSender.setAttribute('required', 'required');
-    } else {
+    } else if (senderMode === 'auto') {
         manualSection.style.display = 'none';
+        autoDefaults.style.display = 'block';
         selectedSender.removeAttribute('required');
         selectedSender.value = '';
+        hideAccountDefaults();
+    } else {
+        manualSection.style.display = 'none';
+        autoDefaults.style.display = 'none';
+        selectedSender.removeAttribute('required');
+        selectedSender.value = '';
+        hideAccountDefaults();
     }
     
+    updateCcBccLabels();
+    updateRecipientsDisplay();
     validateForm();
+}
+
+function updateDefaultCcBcc() {
+    const selectedSender = document.getElementById('selected_sender');
+    const selectedOption = selectedSender.options[selectedSender.selectedIndex];
+    
+    if (selectedOption && selectedOption.value) {
+        const defaultCc = selectedOption.getAttribute('data-default-cc') || '';
+        const defaultBcc = selectedOption.getAttribute('data-default-bcc') || '';
+        
+        showAccountDefaults(defaultCc, defaultBcc);
+    } else {
+        hideAccountDefaults();
+    }
+    
+    updateCcBccLabels();
+    updateRecipientsDisplay();
+    validateForm();
+}
+
+function showAccountDefaults(defaultCc, defaultBcc) {
+    const infoDiv = document.getElementById('account-defaults-info');
+    const ccDisplay = document.getElementById('default-cc-display');
+    const bccDisplay = document.getElementById('default-bcc-display');
+    const ccText = document.getElementById('default-cc-text');
+    const bccText = document.getElementById('default-bcc-text');
+    
+    if (defaultCc || defaultBcc) {
+        infoDiv.style.display = 'block';
+        
+        if (defaultCc) {
+            ccDisplay.style.display = 'block';
+            ccText.textContent = defaultCc;
+        } else {
+            ccDisplay.style.display = 'none';
+        }
+        
+        if (defaultBcc) {
+            bccDisplay.style.display = 'block';
+            bccText.textContent = defaultBcc;
+        } else {
+            bccDisplay.style.display = 'none';
+        }
+    } else {
+        infoDiv.style.display = 'none';
+    }
+}
+
+function hideAccountDefaults() {
+    document.getElementById('account-defaults-info').style.display = 'none';
+}
+
+function updateCcBccLabels() {
+    const senderMode = document.getElementById('sender_mode').value;
+    const selectedSender = document.getElementById('selected_sender');
+    const ccMergeInfo = document.getElementById('cc-merge-info');
+    const bccMergeInfo = document.getElementById('bcc-merge-info');
+    
+    let showMergeInfo = false;
+    
+    if (senderMode === 'manual' && selectedSender.value) {
+        const selectedOption = selectedSender.options[selectedSender.selectedIndex];
+        const defaultCc = selectedOption.getAttribute('data-default-cc') || '';
+        const defaultBcc = selectedOption.getAttribute('data-default-bcc') || '';
+        
+        if (defaultCc || defaultBcc) {
+            showMergeInfo = true;
+        }
+    }
+    
+    ccMergeInfo.style.display = showMergeInfo ? 'block' : 'none';
+    bccMergeInfo.style.display = showMergeInfo ? 'block' : 'none';
+}
+
+function updateRecipientsDisplay() {
+    const summaryCard = document.getElementById('recipients-summary');
+    const content = document.getElementById('final-recipients-content');
+    const senderMode = document.getElementById('sender_mode').value;
+    const formCc = document.getElementById('cc_emails').value.trim();
+    const formBcc = document.getElementById('bcc_emails').value.trim();
+    
+    let html = '';
+    let hasRecipients = false;
+    
+    if (senderMode === 'manual') {
+        const selectedSender = document.getElementById('selected_sender');
+        if (selectedSender.value) {
+            const selectedOption = selectedSender.options[selectedSender.selectedIndex];
+            const defaultCc = selectedOption.getAttribute('data-default-cc') || '';
+            const defaultBcc = selectedOption.getAttribute('data-default-bcc') || '';
+            
+            // Merge CC/BCC
+            const finalCc = mergeLists(formCc, defaultCc);
+            const finalBcc = mergeLists(formBcc, defaultBcc);
+            
+            if (finalCc.length > 0 || finalBcc.length > 0) {
+                hasRecipients = true;
+                html = '<div class="row">';
+                
+                if (finalCc.length > 0) {
+                    html += `<div class="col-md-6">
+                        <h6><i class="fas fa-copy text-primary"></i> Final CC Recipients:</h6>
+                        <ul class="list-unstyled small">`;
+                    finalCc.forEach(email => {
+                        const isDefault = defaultCc.includes(email);
+                        html += `<li>${email} ${isDefault ? '<span class="badge bg-secondary">default</span>' : '<span class="badge bg-info">added</span>'}</li>`;
+                    });
+                    html += '</ul></div>';
+                }
+                
+                if (finalBcc.length > 0) {
+                    html += `<div class="col-md-6">
+                        <h6><i class="fas fa-eye-slash text-secondary"></i> Final BCC Recipients:</h6>
+                        <ul class="list-unstyled small">`;
+                    finalBcc.forEach(email => {
+                        const isDefault = defaultBcc.includes(email);
+                        html += `<li>${email} ${isDefault ? '<span class="badge bg-secondary">default</span>' : '<span class="badge bg-info">added</span>'}</li>`;
+                    });
+                    html += '</ul></div>';
+                }
+                
+                html += '</div>';
+            }
+        }
+    } else if (senderMode === 'auto' && (formCc || formBcc)) {
+        hasRecipients = true;
+        html = '<div class="alert alert-info">';
+        html += '<h6><i class="fas fa-info-circle"></i> Auto-rotate Mode Recipients:</h6>';
+        
+        if (formCc) {
+            html += `<p><strong>Additional CC:</strong> ${formCc}</p>`;
+        }
+        if (formBcc) {
+            html += `<p><strong>Additional BCC:</strong> ${formBcc}</p>`;
+        }
+        
+        html += '<small class="text-muted">Each account will also use its own default CC/BCC settings.</small>';
+        html += '</div>';
+    }
+    
+    if (hasRecipients) {
+        content.innerHTML = html;
+        summaryCard.style.display = 'block';
+    } else {
+        summaryCard.style.display = 'none';
+    }
+}
+
+function mergeLists(formList, defaultList) {
+    const formEmails = formList ? formList.split(',').map(email => email.trim()).filter(email => email) : [];
+    const defaultEmails = defaultList ? defaultList.split(',').map(email => email.trim()).filter(email => email) : [];
+    
+    // Remove duplicates while preserving order
+    const merged = [...new Set([...formEmails, ...defaultEmails])];
+    return merged;
 }
 
 function validateForm() {
@@ -418,7 +556,6 @@ function validateForm() {
             sendButton.classList.add('btn-success');
         }
     } else {
-        // Auto mode or valid selection
         sendButton.disabled = false;
         sendButton.innerHTML = '<i class="fas fa-paper-plane"></i> Send Bulk Emails';
         sendButton.classList.remove('btn-warning', 'btn-danger');
@@ -427,105 +564,79 @@ function validateForm() {
 }
 
 function insertPlaceholder(columnName) {
-    const textarea = document.getElementById('template');
+    const template = document.getElementById('template');
     const placeholder = '{' + columnName + '}';
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const text = textarea.value;
-    
-    textarea.value = text.substring(0, start) + placeholder + text.substring(end);
-    textarea.selectionStart = textarea.selectionEnd = start + placeholder.length;
-    textarea.focus();
-    
-    // Update preview after inserting placeholder
+    const start = template.selectionStart;
+    const end = template.selectionEnd;
+    const text = template.value;
+    const before = text.substring(0, start);
+    const after = text.substring(end, text.length);
+    template.value = before + placeholder + after;
+    template.selectionStart = template.selectionEnd = start + placeholder.length;
+    template.focus();
     updatePreview();
 }
 
 function updatePreview() {
+    const subject = document.getElementById('subject').value;
     const template = document.getElementById('template').value;
-    const preview = document.getElementById('email-preview');
+    const previewContent = document.getElementById('preview-content');
     
-    if (template.trim()) {
-        // Replace placeholders with sample data for preview
-        let previewText = template;
+    if (subject && template && Object.keys(sampleData).length > 0) {
+        let previewSubject = subject;
+        let previewBody = template;
         
-        // Use sample data if available
-        if (Object.keys(sampleData).length > 0) {
-            columns.forEach(function(column) {
-                const placeholder = '{' + column + '}';
-                const value = sampleData[column] || '[' + column + ']';
-                // Use a simple replace for each placeholder
-                previewText = previewText.split(placeholder).join(value);
-            });
+        // Replace placeholders with sample data
+        for (const [key, value] of Object.entries(sampleData)) {
+            const placeholder = '{' + key + '}';
+            previewSubject = previewSubject.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), value || `[${key}]`);
+            previewBody = previewBody.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), value || `[${key}]`);
         }
         
-        // Convert line breaks to HTML for preview
-        previewText = previewText.replace(/\n/g, '<br>');
+        // Format the preview
+        previewBody = previewBody.replace(/\n/g, '<br>');
         
-        preview.innerHTML = previewText || 'Email preview...';
-        preview.classList.add('has-content');
+        previewContent.innerHTML = `
+            <div class="border rounded p-3">
+                <h6 class="text-primary border-bottom pb-2">Subject: ${previewSubject}</h6>
+                <div class="mt-2">${previewBody}</div>
+            </div>
+        `;
     } else {
-        preview.innerHTML = '<div class="text-muted">Email preview will appear here as you type...</div>';
-        preview.classList.remove('has-content');
+        previewContent.innerHTML = '<p class="text-muted">Enter a subject and template to see preview</p>';
     }
 }
 
-// Handle attachment upload
-function handleAttachmentUpload() {
-    const fileInput = document.getElementById('attachment');
-    const file = fileInput.files[0];
-    
-    if (!file) return;
-    
-    // Check file size (25MB limit)
-    if (file.size > 25 * 1024 * 1024) {
-        alert('File size must be less than 25MB');
-        fileInput.value = '';
-        return;
+// File upload handling
+document.getElementById('attachment').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (file) {
+        const formData = new FormData();
+        formData.append('attachment', file);
+        
+        fetch('/upload_attachment', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('attachment_filename').value = data.filename;
+                document.getElementById('attachment-name').textContent = data.filename;
+                document.getElementById('attachment-size').textContent = data.size;
+                document.getElementById('attachment-status').style.display = 'block';
+            } else {
+                alert('Upload failed: ' + data.message);
+                e.target.value = '';
+            }
+        })
+        .catch(error => {
+            console.error('Upload error:', error);
+            alert('Upload failed. Please try again.');
+            e.target.value = '';
+        });
     }
-    
-    const formData = new FormData();
-    formData.append('attachment', file);
-    
-    // Show loading state
-    const statusDiv = document.getElementById('attachment-status');
-    statusDiv.style.display = 'block';
-    statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin"></i> Uploading...</div>';
-    
-    fetch('/upload_attachment', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            document.getElementById('attachment_filename').value = data.filename;
-            document.getElementById('attachment-name').textContent = data.filename;
-            document.getElementById('attachment-size').textContent = data.size;
-            statusDiv.innerHTML = `
-                <div class="alert alert-success">
-                    <i class="fas fa-paperclip"></i>
-                    <strong>Attached:</strong> <span id="attachment-name">${data.filename}</span>
-                    <span class="badge bg-secondary ms-2" id="attachment-size">${data.size}</span>
-                    <button type="button" class="btn btn-sm btn-outline-danger ms-2" onclick="removeAttachment()">
-                        <i class="fas fa-times"></i> Remove
-                    </button>
-                </div>
-            `;
-        } else {
-            statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> ${data.message}</div>`;
-            setTimeout(() => {
-                statusDiv.style.display = 'none';
-            }, 3000);
-        }
-    })
-    .catch(error => {
-        statusDiv.innerHTML = '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> Upload failed</div>';
-        setTimeout(() => {
-            statusDiv.style.display = 'none';
-        }, 3000);
-    });
-}
+});
 
 function removeAttachment() {
     document.getElementById('attachment').value = '';
@@ -533,86 +644,84 @@ function removeAttachment() {
     document.getElementById('attachment-status').style.display = 'none';
 }
 
-// Add form submit handler to ensure validation doesn't prevent submission
-function handleFormSubmit(event) {
-    const senderMode = document.getElementById('sender_mode').value;
-    const selectedSender = document.getElementById('selected_sender').value;
-    const sendButton = document.getElementById('sendButton');
-    
-    // Additional validation before form submission
-    if (senderMode === 'manual' && !selectedSender) {
-        event.preventDefault();
-        alert('Please select an email account for manual mode.');
-        return false;
-    }
-    
-    // Show loading state
-    if (sendButton) {
-        sendButton.disabled = true;
-        sendButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting Email Send...';
-    }
-    
-    return true;
-}
-
-// Add event listeners
+// Event listeners
 document.addEventListener('DOMContentLoaded', function() {
+    // Initial setup
+    toggleSenderOptions();
     updatePreview();
     
-    // Add event listener for sender selection change
-    const selectedSenderEl = document.getElementById('selected_sender');
-    const senderModeEl = document.getElementById('sender_mode');
-    const formEl = document.querySelector('form');
-    const attachmentInput = document.getElementById('attachment');
+    // Auto-update preview when fields change
+    document.getElementById('subject').addEventListener('input', updatePreview);
+    document.getElementById('template').addEventListener('input', updatePreview);
     
-    if (selectedSenderEl) {
-        selectedSenderEl.addEventListener('change', validateForm);
-    }
+    // Update recipients display when CC/BCC changes
+    document.getElementById('cc_emails').addEventListener('input', updateRecipientsDisplay);
+    document.getElementById('bcc_emails').addEventListener('input', updateRecipientsDisplay);
     
-    if (senderModeEl) {
-        senderModeEl.addEventListener('change', validateForm);
-    }
-    
-    if (formEl) {
-        formEl.addEventListener('submit', handleFormSubmit);
-    }
-    
-    if (attachmentInput) {
-        attachmentInput.addEventListener('change', handleAttachmentUpload);
-    }
-    
-    // Initial validation
-    validateForm();
+    // Form validation on change
+    document.getElementById('sender_mode').addEventListener('change', validateForm);
+    document.getElementById('selected_sender').addEventListener('change', validateForm);
 });
-
-// Update preview as user types
-const templateEl = document.getElementById('template');
-if (templateEl) {
-    templateEl.addEventListener('input', updatePreview);
-    
-    // Preserve formatting when pasting
-    templateEl.addEventListener('paste', function(e) {
-        // Allow default paste behavior to preserve formatting
-        setTimeout(updatePreview, 10);
-    });
-    
-    // Handle tab key in textarea for better formatting
-    templateEl.addEventListener('keydown', function(e) {
-        if (e.key === 'Tab') {
-            e.preventDefault();
-            const start = this.selectionStart;
-            const end = this.selectionEnd;
-            
-            // Insert tab character
-            this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
-            
-            // Move cursor after inserted tab
-            this.selectionStart = this.selectionEnd = start + 1;
-            
-            updatePreview();
-        }
-    });
-}
 </script>
 
+<style>
+.template-editor {
+    height: 200px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.5;
+}
+
+.placeholder-tag {
+    display: inline-block;
+    background-color: #e9ecef;
+    color: #495057;
+    padding: 2px 6px;
+    margin: 2px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.8em;
+    border: 1px solid #ced4da;
+}
+
+.placeholder-tag:hover {
+    background-color: #007bff;
+    color: white;
+}
+
+.progress {
+    border-radius: 10px;
+}
+
+.account-item {
+    font-size: 0.9em;
+}
+
+.account-item .progress {
+    height: 6px;
+}
+
+.card {
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    border: 1px solid rgba(0, 0, 0, 0.125);
+}
+
+.card-header {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+}
+
+.badge {
+    font-size: 0.7em;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .col-md-4 .card {
+        margin-top: 1rem;
+    }
+    
+    .account-item {
+        font-size: 0.8em;
+    }
+}
+</style>
 {% endblock %}

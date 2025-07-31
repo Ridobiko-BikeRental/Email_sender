@@ -33,6 +33,26 @@
                                 </a>
                             </div>
                         </div>
+
+                        <!-- Default CC/BCC Section -->
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="default_cc" class="form-label">Default CC:</label>
+                                    <input type="email" class="form-control" id="default_cc" name="default_cc" 
+                                           placeholder="cc1@example.com, cc2@example.com" multiple>
+                                    <div class="form-text">Comma-separated email addresses for CC (optional)</div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="default_bcc" class="form-label">Default BCC:</label>
+                                    <input type="email" class="form-control" id="default_bcc" name="default_bcc" 
+                                           placeholder="bcc1@example.com, bcc2@example.com" multiple>
+                                    <div class="form-text">Comma-separated email addresses for BCC (optional)</div>
+                                </div>
+                            </div>
+                        </div>
                         
                         <button type="submit" class="btn btn-primary">
                             <i class="fas fa-plus"></i> Add Email Account
@@ -57,6 +77,7 @@
                             </ul>
                         </li>
                         <li><strong>Add Account:</strong> Use your Gmail address and the App Password above</li>
+                        <li><strong>Default CC/BCC:</strong> Optional default recipients for all emails from this account</li>
                         <li><strong>Daily Limit:</strong> Each account can send up to 15 emails per day</li>
                     </ol>
                 </div>
@@ -77,6 +98,7 @@
                                         <th>Email</th>
                                         <th>Status</th>
                                         <th>Usage Today</th>
+                                        <th>Default CC/BCC</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
@@ -104,9 +126,30 @@
                                             </div>
                                         </td>
                                         <td>
+                                            <div class="cc-bcc-display">
+                                                {% if account.default_cc %}
+                                                    <div class="cc-info">
+                                                        <i class="fas fa-copy text-primary" title="CC"></i>
+                                                        <span class="small text-truncate" style="max-width: 120px; display: inline-block;" 
+                                                              title="{{ account.default_cc }}">{{ account.default_cc }}</span>
+                                                    </div>
+                                                {% endif %}
+                                                {% if account.default_bcc %}
+                                                    <div class="bcc-info">
+                                                        <i class="fas fa-eye-slash text-secondary" title="BCC"></i>
+                                                        <span class="small text-truncate" style="max-width: 120px; display: inline-block;" 
+                                                              title="{{ account.default_bcc }}">{{ account.default_bcc }}</span>
+                                                    </div>
+                                                {% endif %}
+                                                {% if not account.default_cc and not account.default_bcc %}
+                                                    <small class="text-muted">None set</small>
+                                                {% endif %}
+                                            </div>
+                                        </td>
+                                        <td>
                                             <div class="btn-group btn-group-sm" role="group">
                                                 <button type="button" class="btn btn-outline-primary" 
-                                                        onclick="editAccount({{ account.id }}, '{{ account.email }}', {{ account.is_active|lower }})"
+                                                        onclick="editAccount({{ account.id }}, '{{ account.email }}', {{ account.is_active|lower }}, '{{ account.default_cc }}', '{{ account.default_bcc }}')"
                                                         data-bs-toggle="modal" data-bs-target="#editModal">
                                                     <i class="fas fa-edit"></i>
                                                 </button>
@@ -175,7 +218,7 @@
 
 <!-- Edit Account Modal -->
 <div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="editModalLabel">Edit Email Account</h5>
@@ -197,12 +240,39 @@
                             </button>
                         </div>
                     </div>
+
+                    <!-- Default CC/BCC Section in Edit Modal -->
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="editDefaultCc" class="form-label">Default CC:</label>
+                                <input type="email" class="form-control" id="editDefaultCc" name="default_cc" 
+                                       placeholder="cc1@example.com, cc2@example.com" multiple>
+                                <div class="form-text">Comma-separated email addresses for CC (optional)</div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="editDefaultBcc" class="form-label">Default BCC:</label>
+                                <input type="email" class="form-control" id="editDefaultBcc" name="default_bcc" 
+                                       placeholder="bcc1@example.com, bcc2@example.com" multiple>
+                                <div class="form-text">Comma-separated email addresses for BCC (optional)</div>
+                            </div>
+                        </div>
+                    </div>
                     
                     <div class="mb-3 form-check">
                         <input type="checkbox" class="form-check-input" id="editActive" name="is_active">
                         <label class="form-check-label" for="editActive">
                             Account Active
                         </label>
+                    </div>
+
+                    <!-- CC/BCC Preview -->
+                    <div class="alert alert-info" id="ccBccPreview" style="display: none;">
+                        <h6><i class="fas fa-info-circle"></i> Default Recipients Preview:</h6>
+                        <div id="ccPreview"></div>
+                        <div id="bccPreview"></div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -257,11 +327,16 @@ function togglePassword(fieldId) {
     }
 }
 
-function editAccount(id, email, isActive) {
+function editAccount(id, email, isActive, defaultCc, defaultBcc) {
     document.getElementById('editEmail').value = email;
     document.getElementById('editPassword').value = ''; // Don't pre-fill password for security
     document.getElementById('editActive').checked = isActive;
+    document.getElementById('editDefaultCc').value = defaultCc || '';
+    document.getElementById('editDefaultBcc').value = defaultBcc || '';
     document.getElementById('editForm').action = '/update_account/' + id;
+    
+    // Update preview
+    updateCcBccPreview();
 }
 
 function deleteAccount(id, email) {
@@ -269,9 +344,32 @@ function deleteAccount(id, email) {
     document.getElementById('deleteForm').action = '/delete_account/' + id;
 }
 
-// Auto-hide alerts after 5 seconds
+function updateCcBccPreview() {
+    const cc = document.getElementById('editDefaultCc').value.trim();
+    const bcc = document.getElementById('editDefaultBcc').value.trim();
+    const preview = document.getElementById('ccBccPreview');
+    const ccPreview = document.getElementById('ccPreview');
+    const bccPreview = document.getElementById('bccPreview');
+    
+    if (cc || bcc) {
+        preview.style.display = 'block';
+        ccPreview.innerHTML = cc ? `<strong>CC:</strong> ${cc}` : '';
+        bccPreview.innerHTML = bcc ? `<strong>BCC:</strong> ${bcc}` : '';
+    } else {
+        preview.style.display = 'none';
+    }
+}
+
+// Real-time preview updates
 document.addEventListener('DOMContentLoaded', function() {
-    const alerts = document.querySelectorAll('.alert');
+    const ccField = document.getElementById('editDefaultCc');
+    const bccField = document.getElementById('editDefaultBcc');
+    
+    if (ccField) ccField.addEventListener('input', updateCcBccPreview);
+    if (bccField) bccField.addEventListener('input', updateCcBccPreview);
+    
+    // Auto-hide alerts after 5 seconds
+    const alerts = document.querySelectorAll('.alert:not(#ccBccPreview)');
     alerts.forEach(function(alert) {
         setTimeout(function() {
             alert.style.transition = 'opacity 0.5s';
@@ -280,6 +378,35 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert.remove();
             }, 500);
         }, 5000);
+    });
+});
+
+// Email validation for CC/BCC fields
+function validateEmailList(input) {
+    const emails = input.value.split(',').map(email => email.trim()).filter(email => email);
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const invalidEmails = emails.filter(email => !emailRegex.test(email));
+    
+    if (invalidEmails.length > 0) {
+        input.setCustomValidity('Invalid email addresses: ' + invalidEmails.join(', '));
+        input.classList.add('is-invalid');
+    } else {
+        input.setCustomValidity('');
+        input.classList.remove('is-invalid');
+    }
+}
+
+// Add validation to CC/BCC fields
+document.addEventListener('DOMContentLoaded', function() {
+    const ccFields = document.querySelectorAll('input[name="default_cc"]');
+    const bccFields = document.querySelectorAll('input[name="default_bcc"]');
+    
+    ccFields.forEach(field => {
+        field.addEventListener('blur', () => validateEmailList(field));
+    });
+    
+    bccFields.forEach(field => {
+        field.addEventListener('blur', () => validateEmailList(field));
     });
 });
 </script>
@@ -316,6 +443,30 @@ document.addEventListener('DOMContentLoaded', function() {
     border-radius: 0.5rem;
 }
 
+/* CC/BCC Display Styling */
+.cc-bcc-display {
+    font-size: 0.8rem;
+    line-height: 1.2;
+}
+
+.cc-info, .bcc-info {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 2px;
+}
+
+.cc-info i, .bcc-info i {
+    font-size: 0.75rem;
+    min-width: 12px;
+}
+
+.text-truncate {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* Custom styling for better visual hierarchy */
 .text-primary { color: #0d6efd !important; }
 .text-success { color: #198754 !important; }
@@ -328,5 +479,22 @@ document.addEventListener('DOMContentLoaded', function() {
 .bg-info { background-color: #0dcaf0 !important; }
 .bg-warning { background-color: #ffc107 !important; }
 .bg-danger { background-color: #dc3545 !important; }
+
+/* Form validation styling */
+.is-invalid {
+    border-color: #dc3545;
+    box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25);
+}
+
+/* Responsive table adjustments */
+@media (max-width: 768px) {
+    .table-responsive {
+        font-size: 0.875rem;
+    }
+    
+    .cc-bcc-display {
+        display: none;
+    }
+}
 </style>
 {% endblock %}
