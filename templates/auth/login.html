@@ -1,0 +1,91 @@
+
+{% extends "base.html" %}
+
+{% block title %}Login - Bulk Email Sender{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="card">
+        <div class="card-header bg-primary text-white text-center">
+            <h4><i class="fas fa-sign-in-alt"></i> Login</h4>
+        </div>
+        <div class="card-body">
+            <form method="POST">
+                <div class="mb-3">
+                    <label for="username" class="form-label">Username:</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="fas fa-user"></i></span>
+                        <input type="text" class="form-control" id="username" name="username" required 
+                               placeholder="Enter your username" value="{{ request.form.get('username', '') }}">
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="password" class="form-label">Password:</label>
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="fas fa-lock"></i></span>
+                        <input type="password" class="form-control" id="password" name="password" required 
+                               placeholder="Enter your password">
+                        <button class="btn btn-outline-secondary" type="button" onclick="togglePassword()">
+                            <i class="fas fa-eye" id="password-icon"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-sign-in-alt"></i> Login
+                    </button>
+                </div>
+            </form>
+            
+            <hr class="my-4">
+            
+            <div class="text-center">
+                <p class="mb-0">Don't have an account?</p>
+                <a href="{{ url_for('signup') }}" class="btn btn-outline-primary">
+                    <i class="fas fa-user-plus"></i> Create Account
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Demo Info Card -->
+    <div class="card mt-4">
+        <div class="card-header bg-info text-white">
+            <h6 class="mb-0"><i class="fas fa-info-circle"></i> Getting Started</h6>
+        </div>
+        <div class="card-body">
+            <p class="small mb-2"><strong>New to Bulk Email Sender?</strong></p>
+            <ol class="small mb-0">
+                <li>Create your account using the sign up form</li>
+                <li>Add your Gmail accounts with App Passwords</li>
+                <li>Upload your contact list (CSV/Excel)</li>
+                <li>Compose and send your bulk emails</li>
+            </ol>
+        </div>
+    </div>
+</div>
+
+<script>
+function togglePassword() {
+    const field = document.getElementById('password');
+    const icon = document.getElementById('password-icon');
+    
+    if (field.type === 'password') {
+        field.type = 'text';
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+    } else {
+        field.type = 'password';
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+    }
+}
+
+// Auto-focus on first input
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('username').focus();
+});
+</script>
+{% endblock %}

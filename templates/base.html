@@ -4,43 +4,47 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Bulk Email Sender{% endblock %}</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        .card { margin-bottom: 20px; }
-        .preview-table { max-height: 300px; overflow-y: auto; }
-        .template-editor { min-height: 200px; }
-        .placeholder-tag { 
-            background: #e3f2fd; 
-            color: #1976d2; 
-            padding: 2px 6px; 
-            border-radius: 4px; 
-            margin: 2px; 
-            cursor: pointer; 
+        .navbar-brand {
+            font-weight: bold;
         }
-        .navbar-nav .nav-link {
-            transition: all 0.3s ease;
+        .footer {
+            margin-top: 50px;
+            padding: 20px 0;
+            background-color: #f8f9fa;
+            border-top: 1px solid #dee2e6;
         }
-        .navbar-nav .nav-link:hover {
-            background-color: rgba(255, 255, 255, 0.1);
-            border-radius: 5px;
+        .user-info {
+            font-size: 0.9em;
+        }
+        .auth-container {
+            max-width: 400px;
+            margin: 0 auto;
+            padding-top: 50px;
+        }
+        .card {
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            border: 1px solid rgba(0, 0, 0, 0.125);
         }
     </style>
 </head>
 <body>
+    <!-- Navigation -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
             <a class="navbar-brand" href="{{ url_for('index') }}">
                 <i class="fas fa-envelope"></i> Bulk Email Sender
             </a>
             
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" 
-                    aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            {% if session.user_id %}
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             
             <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto">
+                <ul class="navbar-nav me-auto">
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('index') }}">
                             <i class="fas fa-home"></i> Home
@@ -48,7 +52,12 @@
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('manage_accounts') }}">
-                            <i class="fas fa-users-cog"></i> Manage Accounts
+                            <i class="fas fa-users"></i> Manage Accounts
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logs') }}">
+                            <i class="fas fa-history"></i> Email Logs
                         </a>
                     </li>
                     <li class="nav-item">
@@ -56,32 +65,81 @@
                             <i class="fas fa-chart-line"></i> Status
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('logs') }}">
-                            <i class="fas fa-history"></i> Logs
+                </ul>
+                
+                <ul class="navbar-nav">
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle user-info" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="fas fa-user-circle"></i> 
+                            {{ session.get('full_name', session.get('username', 'User')) }}
                         </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><h6 class="dropdown-header">Welcome, {{ session.get('username', 'User') }}!</h6></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="{{ url_for('profile') }}">
+                                <i class="fas fa-user"></i> Profile
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('logout') }}">
+                                <i class="fas fa-sign-out-alt"></i> Logout
+                            </a></li>
+                        </ul>
                     </li>
                 </ul>
             </div>
+            {% else %}
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="{{ url_for('login') }}">
+                    <i class="fas fa-sign-in-alt"></i> Login
+                </a>
+                <a class="nav-link" href="{{ url_for('signup') }}">
+                    <i class="fas fa-user-plus"></i> Sign Up
+                </a>
+            </div>
+            {% endif %}
         </div>
     </nav>
 
-    <div class="container-fluid mt-4">
-        {% with messages = get_flashed_messages() %}
+    <!-- Flash Messages -->
+    <div class="container mt-3">
+        {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                {% for message in messages %}
-                    <div class="alert alert-info alert-dismissible fade show" role="alert">
-                        <i class="fas fa-info-circle"></i> {{ message }}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                     </div>
                 {% endfor %}
             {% endif %}
         {% endwith %}
-
-        {% block content %}{% endblock %}
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <!-- Main Content -->
+    <main class="container my-4">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer mt-auto">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-6">
+                    <p class="mb-0">&copy; 2025 Bulk Email Sender. All rights reserved.</p>
+                </div>
+                <div class="col-md-6 text-end">
+                    <small class="text-muted">
+                        {% if session.user_id %}
+                            Logged in as: {{ session.get('username', 'User') }}
+                        {% else %}
+                            <a href="{{ url_for('login') }}">Login</a> | 
+                            <a href="{{ url_for('signup') }}">Sign Up</a>
+                        {% endif %}
+                    </small>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

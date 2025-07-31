@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Profile - Bulk Email Sender{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4><i class="fas fa-user"></i> Profile Information</h4>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label"><strong>Username:</strong></label>
+                    <p class="form-control-plaintext">{{ user.username }}</p>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label"><strong>Email:</strong></label>
+                    <p class="form-control-plaintext">{{ user.email }}</p>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label"><strong>Full Name:</strong></label>
+                    <p class="form-control-plaintext">{{ user.full_name or 'Not provided' }}</p>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label"><strong>Member Since:</strong></label>
+                    <p class="form-control-plaintext">{{ user.created_at }}</p>
+                </div>
+                
+                <div class="mb-3">
+                    <label class="form-label"><strong>Last Login:</strong></label>
+                    <p class="form-control-plaintext">{{ user.last_login or 'Never' }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-info text-white">
+                <h4><i class="fas fa-chart-bar"></i> Account Statistics</h4>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-6">
+                        <h3 class="text-primary">{{ account_stats|length }}</h3>
+                        <p>Email Accounts</p>
+                    </div>
+                    <div class="col-6">
+                        <h3 class="text-success">{{ account_stats|selectattr("is_active")|list|length }}</h3>
+                        <p>Active Accounts</p>
+                    </div>
+                </div>
+                
+                <div class="row text-center">
+                    <div class="col-6">
+                        <h3 class="text-info">{{ total_logs }}</h3>
+                        <p>Email Campaigns</p>
+                    </div>
+                    <div class="col-6">
+                        <h3 class="text-warning">{{ account_stats|selectattr("is_active")|sum(attribute='remaining') }}</h3>
+                        <p>Daily Remaining</p>
+                    </div>
+                </div>
+                
+                <hr>
+                
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('manage_accounts') }}" class="btn btn-outline-primary">
+                        <i class="fas fa-users"></i> Manage Email Accounts
+                    </a>
+                    <a href="{{ url_for('logs') }}" class="btn btn-outline-info">
+                        <i class="fas fa-history"></i> View Email Logs
+                    </a>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Quick Actions Card -->
+        <div class="card mt-4">
+            <div class="card-header bg-success text-white">
+                <h5><i class="fas fa-bolt"></i> Quick Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="{{ url_for('index') }}" class="btn btn-success">
+                        <i class="fas fa-envelope"></i> Send Bulk Email
+                    </a>
+                    <a href="{{ url_for('status') }}" class="btn btn-outline-secondary">
+                        <i class="fas fa-chart-line"></i> Check Status
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

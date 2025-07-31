@@ -1,29 +1,216 @@
 {% extends "base.html" %}
 
+{% block title %}Home - Bulk Email Sender{% endblock %}
+
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-8">
+{% if not session.user_id %}
+<!-- Welcome Section for Non-logged Users -->
+<div class="jumbotron bg-primary text-white rounded p-5 mb-5">
+    <div class="row align-items-center">
+        <div class="col-md-8">
+            <h1 class="display-4"><i class="fas fa-envelope"></i> Bulk Email Sender</h1>
+            <p class="lead">Professional bulk email solution with automatic sender rotation, attachment support, and comprehensive logging.</p>
+            <div class="mt-4">
+                <a href="{{ url_for('signup') }}" class="btn btn-light btn-lg me-3">
+                    <i class="fas fa-user-plus"></i> Get Started Free
+                </a>
+                <a href="{{ url_for('login') }}" class="btn btn-outline-light btn-lg">
+                    <i class="fas fa-sign-in-alt"></i> Login
+                </a>
+            </div>
+        </div>
+        <div class="col-md-4 text-center">
+            <i class="fas fa-paper-plane fa-5x opacity-75"></i>
+        </div>
+    </div>
+</div>
+
+<!-- Features Section -->
+<div class="row mb-5">
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-sync-alt fa-3x text-primary mb-3"></i>
+                <h5>Auto Sender Rotation</h5>
+                <p class="text-muted">Automatically rotate between multiple Gmail accounts to maximize delivery rates and avoid limits.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-paperclip fa-3x text-success mb-3"></i>
+                <h5>File Attachments</h5>
+                <p class="text-muted">Send PDF, DOC, images and other file types with your bulk emails. Up to 25MB per attachment.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-copy fa-3x text-info mb-3"></i>
+                <h5>CC & BCC Support</h5>
+                <p class="text-muted">Add carbon copy and blind carbon copy recipients to all your emails with default settings per account.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-5">
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-chart-line fa-3x text-warning mb-3"></i>
+                <h5>Real-time Tracking</h5>
+                <p class="text-muted">Monitor email sending progress in real-time with detailed success and failure reports.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-table fa-3x text-secondary mb-3"></i>
+                <h5>CSV & Excel Support</h5>
+                <p class="text-muted">Upload contact lists in CSV or Excel format with automatic column detection and personalization.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <i class="fas fa-shield-alt fa-3x text-danger mb-3"></i>
+                <h5>Secure & Private</h5>
+                <p class="text-muted">Your data is completely isolated. Each user account has secure, encrypted storage.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Call to Action -->
+<div class="text-center">
+    <h3>Ready to get started?</h3>
+    <p class="lead text-muted">Create your free account and start sending professional bulk emails today.</p>
+    <a href="{{ url_for('signup') }}" class="btn btn-primary btn-lg">
+        <i class="fas fa-rocket"></i> Create Free Account
+    </a>
+</div>
+
+{% else %}
+<!-- Dashboard for Logged-in Users -->
+<div class="row">
+    <div class="col-md-12">
         <div class="card">
-            <div class="card-header">
-                <h3><i class="fas fa-upload"></i> Upload Recipients File</h3>
+            <div class="card-header bg-primary text-white">
+                <h3><i class="fas fa-upload"></i> Upload Contact List</h3>
             </div>
             <div class="card-body">
                 <form action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data">
                     <div class="mb-3">
-                        <label for="file" class="form-label">Select CSV or Excel file containing email addresses:</label>
+                        <label for="file" class="form-label">Select CSV or Excel file:</label>
                         <input type="file" class="form-control" id="file" name="file" accept=".csv,.xlsx,.xls" required>
                         <div class="form-text">
-                            Supported formats: CSV, Excel (.xlsx, .xls). Maximum file size: 16MB
+                            <i class="fas fa-info-circle"></i>
+                            Supported formats: CSV (.csv), Excel (.xlsx, .xls). 
+                            Your file should contain a column with email addresses.
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-upload"></i> Upload File
+                        <i class="fas fa-upload"></i> Upload and Continue
                     </button>
                 </form>
             </div>
         </div>
-
-        
     </div>
 </div>
+
+<!-- Quick Stats Dashboard -->
+{% if account_stats %}
+<div class="row mt-4">
+    <div class="col-md-3">
+        <div class="card text-center bg-primary text-white">
+            <div class="card-body">
+                <i class="fas fa-users fa-2x mb-2"></i>
+                <h4>{{ account_stats|selectattr("is_active")|list|length }}</h4>
+                <p class="mb-0">Active Accounts</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center bg-success text-white">
+            <div class="card-body">
+                <i class="fas fa-envelope fa-2x mb-2"></i>
+                <h4>{{ account_stats|selectattr("is_active")|sum(attribute='remaining') }}</h4>
+                <p class="mb-0">Emails Remaining Today</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center bg-info text-white">
+            <div class="card-body">
+                <i class="fas fa-paper-plane fa-2x mb-2"></i>
+                <h4>{{ account_stats|sum(attribute='sent_today') }}</h4>
+                <p class="mb-0">Sent Today</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center bg-warning text-white">
+            <div class="card-body">
+                <i class="fas fa-chart-bar fa-2x mb-2"></i>
+                <h4>{{ account_stats|length }}</h4>
+                <p class="mb-0">Total Accounts</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="row mt-4">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-bolt"></i> Quick Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3 mb-2">
+                        <a href="{{ url_for('manage_accounts') }}" class="btn btn-outline-primary w-100">
+                            <i class="fas fa-users"></i><br>Manage Accounts
+                        </a>
+                    </div>
+                    <div class="col-md-3 mb-2">
+                        <a href="{{ url_for('logs') }}" class="btn btn-outline-info w-100">
+                            <i class="fas fa-history"></i><br>Email Logs
+                        </a>
+                    </div>
+                    <div class="col-md-3 mb-2">
+                        <a href="{{ url_for('status') }}" class="btn btn-outline-success w-100">
+                            <i class="fas fa-chart-line"></i><br>Status Monitor
+                        </a>
+                    </div>
+                    <div class="col-md-3 mb-2">
+                        <a href="{{ url_for('profile') }}" class="btn btn-outline-secondary w-100">
+                            <i class="fas fa-user"></i><br>Profile
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<!-- No accounts warning -->
+<div class="row mt-4">
+    <div class="col-md-12">
+        <div class="alert alert-warning">
+            <h5><i class="fas fa-exclamation-triangle"></i> Setup Required</h5>
+            <p>You haven't added any email accounts yet. You need to add at least one Gmail account to start sending bulk emails.</p>
+            <a href="{{ url_for('manage_accounts') }}" class="btn btn-primary">
+                <i class="fas fa-plus"></i> Add Your First Email Account
+            </a>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endif %}
 {% endblock %}
