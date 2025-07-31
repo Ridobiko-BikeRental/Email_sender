@@ -1635,7 +1635,7 @@ def forgot_password():
         success, message = send_otp_email(email, otp)
         if success:
             flash('OTP sent to your email address. Check your inbox.', 'success')
-            return redirect(url_for('verify_otp', email=email))
+            return redirect(url_for('verify_otp_page', email=email))
         else:
             flash('Failed to send OTP. Please try again later.', 'error')
             logger.error(f"Failed to send OTP to {email}: {message}")
