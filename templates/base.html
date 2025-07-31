@@ -71,10 +71,10 @@
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle user-info" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown">
                             <i class="fas fa-user-circle"></i> 
-                            {{ session.get('full_name', session.get('username', 'User')) }}
+                            {{ session.get('full_name', session.get('email', 'User')) }}
                         </a>
                         <ul class="dropdown-menu dropdown-menu-end">
-                            <li><h6 class="dropdown-header">Welcome, {{ session.get('username', 'User') }}!</h6></li>
+                            <li><h6 class="dropdown-header">{{ session.get('email', 'User') }}</h6></li>
                             <li><hr class="dropdown-divider"></li>
                             <li><a class="dropdown-item" href="{{ url_for('profile') }}">
                                 <i class="fas fa-user"></i> Profile
@@ -128,7 +128,7 @@
                 <div class="col-md-6 text-end">
                     <small class="text-muted">
                         {% if session.user_id %}
-                            Logged in as: {{ session.get('username', 'User') }}
+                            Logged in as: {{ session.get('email', 'User') }}
                         {% else %}
                             <a href="{{ url_for('login') }}">Login</a> | 
                             <a href="{{ url_for('signup') }}">Sign Up</a>

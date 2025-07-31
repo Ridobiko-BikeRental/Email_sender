@@ -20,6 +20,9 @@ from openpyxl import load_workbook
 import html
 from contextlib import contextmanager
 from functools import wraps
+import random
+import string
+from datetime import datetime, timedelta
 
 # Load environment variables
 load_dotenv()
@@ -85,14 +88,13 @@ def init_database():
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
-        # Create users table
+        # Create users table (removed username, email is now primary identifier)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
                 email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
-                full_name TEXT,
+                full_name TEXT NOT NULL,
                 is_active BOOLEAN DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_login TIMESTAMP
@@ -207,41 +209,36 @@ def get_user_email_status(user_id):
     return email_status[user_id]
 
 # User management functions
-def create_user(username, email, password, full_name=None):
-    """Create a new user"""
+def create_user(email, password, full_name):
+    """Create a new user (removed username parameter)"""
     try:
         password_hash = generate_password_hash(password)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO users (username, email, password_hash, full_name)
-                VALUES (?, ?, ?, ?)
-            ''', (username, email, password_hash, full_name))
+                INSERT INTO users (email, password_hash, full_name)
+                VALUES (?, ?, ?)
+            ''', (email, password_hash, full_name))
             conn.commit()
             user_id = cursor.lastrowid
-            logger.info(f"Created user: {username}")
+            logger.info(f"Created user: {email}")
             return True, user_id
-    except sqlite3.IntegrityError as e:
-        if 'username' in str(e):
-            return False, "Username already exists"
-        elif 'email' in str(e):
-            return False, "Email already exists"
-        else:
-            return False, "User already exists"
+    except sqlite3.IntegrityError:
+        return False, "Email address already exists"
     except Exception as e:
         logger.error(f"Error creating user: {e}")
         return False, f"Error creating user: {str(e)}"
 
-def authenticate_user(username, password):
-    """Authenticate user login"""
+def authenticate_user(email, password):
+    """Authenticate user login (changed from username to email)"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, username, email, password_hash, full_name, is_active
+                SELECT id, email, password_hash, full_name, is_active
                 FROM users 
-                WHERE username = ? AND is_active = 1
-            ''', (username,))
+                WHERE email = ? AND is_active = 1
+            ''', (email,))
             user = cursor.fetchone()
             
             if user and check_password_hash(user['password_hash'], password):
@@ -251,17 +248,17 @@ def authenticate_user(username, password):
                 ''', (user['id'],))
                 conn.commit()
                 return True, dict(user)
-            return False, "Invalid username or password"
+            return False, "Invalid email or password"
     except Exception as e:
         logger.error(f"Error authenticating user: {e}")
         return False, "Authentication error"
 
 def get_user_by_id(user_id):
-    """Get user by ID"""
+    """Get user by ID (removed username from query)"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT id, username, email, full_name, created_at, last_login
+            SELECT id, email, full_name, created_at, last_login
             FROM users 
             WHERE id = ? AND is_active = 1
         ''', (user_id,))
@@ -1003,23 +1000,217 @@ def send_bulk_emails_single_sender(user_id, file_path, sender_email, subject, te
         'sender_rotation': user_status['sender_rotation']
     }
 
+# OTP management functions
+def generate_otp():
+    """Generate a 6-digit OTP"""
+    return ''.join(random.choices(string.digits, k=6))
+
+def save_otp(email, otp):
+    """Save OTP to database with expiration"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Create OTP table if it doesn't exist
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS password_reset_otp (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                otp TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                used BOOLEAN DEFAULT 0
+            )
+        ''')
+        
+        # Clean up old OTPs for this email
+        cursor.execute('DELETE FROM password_reset_otp WHERE email = ?', (email,))
+        
+        # Calculate expiration time (10 minutes from now)
+        expires_at = datetime.now() + timedelta(minutes=10)
+        
+        # Insert new OTP
+        cursor.execute('''
+            INSERT INTO password_reset_otp (email, otp, expires_at)
+            VALUES (?, ?, ?)
+        ''', (email, otp, expires_at))
+        
+        conn.commit()
+        logger.info(f"OTP saved for email: {email}")
+
+def verify_otp(email, otp):
+    """Verify OTP and mark as used"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, expires_at FROM password_reset_otp 
+            WHERE email = ? AND otp = ? AND used = 0
+            ORDER BY created_at DESC LIMIT 1
+        ''', (email, otp))
+        
+        result = cursor.fetchone()
+        if not result:
+            return False, "Invalid OTP"
+        
+        # Check if OTP has expired
+        expires_at = datetime.fromisoformat(result['expires_at'])
+        if datetime.now() > expires_at:
+            return False, "OTP has expired"
+        
+        # Mark OTP as used
+        cursor.execute('UPDATE password_reset_otp SET used = 1 WHERE id = ?', (result['id'],))
+        conn.commit()
+        
+        return True, "OTP verified successfully"
+
+def send_otp_email(recipient_email, otp):
+    """Send OTP via email"""
+    try:
+        otp_sender_email = os.getenv('OTP_EMAIL')
+        otp_sender_password = os.getenv('OTP_EMAIL_PASSWORD')
+        
+        if not otp_sender_email or not otp_sender_password:
+            logger.error("OTP email credentials not configured in environment variables")
+            return False, "Email service not configured"
+        
+        subject = "Password Reset OTP - Bulk Email Sender"
+        
+        # Create HTML email content
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #007bff; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
+                .content {{ background-color: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }}
+                .otp {{ font-size: 32px; font-weight: bold; color: #007bff; text-align: center; letter-spacing: 8px; margin: 20px 0; padding: 15px; background-color: white; border: 2px dashed #007bff; border-radius: 8px; }}
+                .warning {{ background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+                .footer {{ text-align: center; margin-top: 30px; color: #666; font-size: 14px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🔐 Password Reset Request</h1>
+                </div>
+                <div class="content">
+                    <h2>Hello!</h2>
+                    <p>You requested to reset your password for your Bulk Email Sender account.</p>
+                    <p>Your One-Time Password (OTP) is:</p>
+                    
+                    <div class="otp">{otp}</div>
+                    
+                    <div class="warning">
+                        <strong>⚠️ Important:</strong>
+                        <ul>
+                            <li>This OTP is valid for <strong>10 minutes only</strong></li>
+                            <li>Do not share this OTP with anyone</li>
+                            <li>If you didn't request this, please ignore this email</li>
+                        </ul>
+                    </div>
+                    
+                    <p>Enter this OTP on the password reset page to create your new password.</p>
+                    
+                    <p>Best regards,<br>
+                    Bulk Email Sender Team</p>
+                </div>
+                <div class="footer">
+                    <p>This is an automated message. Please do not reply to this email.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Create plain text version
+        text_content = f"""
+        Password Reset Request - Bulk Email Sender
+        
+        Hello!
+        
+        You requested to reset your password for your Bulk Email Sender account.
+        
+        Your One-Time Password (OTP) is: {otp}
+        
+        IMPORTANT:
+        - This OTP is valid for 10 minutes only
+        - Do not share this OTP with anyone
+        - If you didn't request this, please ignore this email
+        
+        Enter this OTP on the password reset page to create your new password.
+        
+        Best regards,
+        Bulk Email Sender Team
+        
+        This is an automated message. Please do not reply to this email.
+        """
+        
+        # Send email using the same SMTP function
+        msg = MIMEMultipart('alternative')
+        msg['From'] = otp_sender_email
+        msg['To'] = recipient_email
+        msg['Subject'] = subject
+        
+        # Add both text and HTML parts
+        text_part = MIMEText(text_content, 'plain', 'utf-8')
+        html_part = MIMEText(html_content, 'html', 'utf-8')
+        
+        msg.attach(text_part)
+        msg.attach(html_part)
+        
+        # Send email
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(otp_sender_email, otp_sender_password)
+        text = msg.as_string()
+        server.sendmail(otp_sender_email, [recipient_email], text)
+        server.quit()
+        
+        logger.info(f"OTP email sent successfully to {recipient_email}")
+        return True, "OTP email sent successfully"
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Failed to send OTP email to {recipient_email}: {error_msg}")
+        return False, f"Failed to send email: {error_msg}"
+
+def reset_user_password(email, new_password):
+    """Reset user password"""
+    try:
+        password_hash = generate_password_hash(new_password)
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users SET password_hash = ? WHERE email = ? AND is_active = 1
+            ''', (password_hash, email))
+            
+            if cursor.rowcount > 0:
+                conn.commit()
+                logger.info(f"Password reset successfully for user: {email}")
+                return True, "Password reset successfully"
+            else:
+                return False, "User not found"
+    except Exception as e:
+        logger.error(f"Error resetting password: {e}")
+        return False, f"Error resetting password: {str(e)}"
+
 # Authentication Routes
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        username = request.form.get('username', '').strip()
+        email = request.form.get('email', '').strip()
         password = request.form.get('password', '').strip()
         
-        if not username or not password:
-            flash('Please enter both username and password.', 'error')
+        if not email or not password:
+            flash('Please enter both email and password.', 'error')
             return render_template('auth/login.html')
         
-        success, result = authenticate_user(username, password)
+        success, result = authenticate_user(email, password)
         if success:
             session['user_id'] = result['id']
-            session['username'] = result['username']
+            session['email'] = result['email']
             session['full_name'] = result['full_name']
-            flash(f'Welcome back, {result["username"]}!', 'success')
+            flash(f'Welcome back, {result["full_name"]}!', 'success')
             return redirect(url_for('index'))
         else:
             flash(result, 'error')
@@ -1029,14 +1220,13 @@ def login():
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
-        username = request.form.get('username', '').strip()
         email = request.form.get('email', '').strip()
         password = request.form.get('password', '').strip()
         confirm_password = request.form.get('confirm_password', '').strip()
         full_name = request.form.get('full_name', '').strip()
         
         # Validation
-        if not all([username, email, password, confirm_password]):
+        if not all([email, password, confirm_password, full_name]):
             flash('All fields are required.', 'error')
             return render_template('auth/signup.html')
         
@@ -1048,7 +1238,7 @@ def signup():
             flash('Password must be at least 6 characters long.', 'error')
             return render_template('auth/signup.html')
         
-        success, result = create_user(username, email, password, full_name)
+        success, result = create_user(email, password, full_name)
         if success:
             flash('Account created successfully! Please log in.', 'success')
             return redirect(url_for('login'))
@@ -1059,17 +1249,31 @@ def signup():
 
 @app.route('/logout')
 def logout():
-    username = session.get('username', 'User')
+    user_email = session.get('email', 'User')
     session.clear()
-    flash(f'Goodbye, {username}! You have been logged out.', 'info')
+    flash(f'You have been logged out successfully, {user_email}!', 'info')
     return redirect(url_for('login'))
+
+@app.route('/profile')
+@login_required
+def profile():
+    user = get_user_by_id(session['user_id'])
+    account_stats = get_account_stats(session['user_id'])
+    
+    # Get total logs count
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) as count FROM email_logs WHERE user_id = ?', (session['user_id'],))
+        total_logs = cursor.fetchone()['count']
+    
+    return render_template('auth/profile.html', user=user, account_stats=account_stats, total_logs=total_logs)
 
 # Main Routes (protected)
 @app.route('/')
 @login_required
 def index():
-    user = get_user_by_id(session['user_id'])
-    return render_template('index.html', user=user)
+    account_stats = get_account_stats(session['user_id'])
+    return render_template('index.html', account_stats=account_stats)
 
 @app.route('/upload', methods=['POST'])
 @login_required
@@ -1085,9 +1289,6 @@ def upload_file():
     
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        # Add user_id to filename to avoid conflicts
-        user_id = session['user_id']
-        filename = f"{user_id}_{filename}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
@@ -1096,7 +1297,7 @@ def upload_file():
         if df is not None:
             columns = list(df.columns)
             sample_data = df.head().to_dict('records')
-            account_stats = get_account_stats(user_id)
+            account_stats = get_account_stats(session['user_id'])
             
             return render_template('compose.html', 
                                  filename=filename, 
@@ -1123,9 +1324,6 @@ def upload_attachment():
     
     if file and allowed_attachment_file(file.filename):
         filename = secure_filename(file.filename)
-        # Add user_id to filename to avoid conflicts
-        user_id = session['user_id']
-        filename = f"{user_id}_{filename}"
         filepath = os.path.join(app.config['ATTACHMENTS_FOLDER'], filename)
         file.save(filepath)
         
@@ -1157,7 +1355,7 @@ def send_emails():
     attachment_filename = request.form.get('attachment_filename', '').strip()
     
     # Debug logging
-    logger.info(f"Form data received for user {user_id} - filename: {filename}, sender_mode: {sender_mode}, selected_sender: '{selected_sender}', subject: {subject}, template length: {len(template) if template else 0}, email_column: {email_column}, cc: {cc_emails}, bcc: {bcc_emails}, attachment: {attachment_filename}")
+    logger.info(f"Form data received - filename: {filename}, sender_mode: {sender_mode}, selected_sender: '{selected_sender}', subject: {subject}, template length: {len(template) if template else 0}, email_column: {email_column}, cc: {cc_emails}, bcc: {bcc_emails}, attachment: {attachment_filename}")
     
     # Validate all required fields
     if not all([filename, sender_mode, subject, template, email_column]):
@@ -1176,20 +1374,20 @@ def send_emails():
             logger.error("Manual mode selected but no sender specified")
             return redirect(url_for('index'))
         
-        # Validate that the selected sender exists in database for this user
+        # Validate that the selected sender exists in database
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT id FROM email_accounts WHERE user_id = ? AND email = ? AND is_active = 1', (user_id, selected_sender))
             if not cursor.fetchone():
                 flash(f'Selected email account "{selected_sender}" is not configured or inactive.')
-                logger.error(f"Selected sender {selected_sender} not found in database for user {user_id}")
+                logger.error(f"Selected sender {selected_sender} not found in database")
                 return redirect(url_for('index'))
     
     # Check if we have any email accounts
     accounts = get_email_accounts(user_id)
     if not accounts:
         flash('No email accounts configured. Please add email accounts first.')
-        logger.error(f"No email accounts configured for user {user_id}")
+        logger.error("No email accounts configured")
         return redirect(url_for('manage_accounts'))
     
     # Check if selected sender has remaining quota
@@ -1201,7 +1399,7 @@ def send_emails():
             account = cursor.fetchone()
             if account and account['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
                 flash(f'Selected account {selected_sender} has reached its daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails.')
-                logger.warning(f"Account {selected_sender} has reached daily limit for user {user_id}")
+                logger.warning(f"Account {selected_sender} has reached daily limit")
                 return redirect(url_for('index'))
     
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -1225,13 +1423,13 @@ def send_emails():
     def send_emails_task():
         try:
             if sender_mode == 'auto':
-                logger.info(f"Starting auto-rotate email sending for user {user_id}")
+                logger.info("Starting auto-rotate email sending")
                 success, result = send_bulk_emails(
                     user_id, filepath, subject, template, email_column, delay, 
                     cc_emails, bcc_emails, attachment_path
                 )
             else:  # manual mode
-                logger.info(f"Starting manual email sending with sender: {selected_sender} for user {user_id}")
+                logger.info(f"Starting manual email sending with sender: {selected_sender}")
                 success, result = send_bulk_emails_single_sender(
                     user_id, filepath, selected_sender, subject, template, email_column, delay,
                     cc_emails, bcc_emails, attachment_path
@@ -1244,10 +1442,10 @@ def send_emails():
                     flash(f"Sender distribution: {rotation_info}")
                 if result['failed_emails']:
                     flash(f"Failed emails: {', '.join(result['failed_emails'][:5])}")
-                logger.info(f"Bulk email sending completed successfully for user {user_id}: {result}")
+                logger.info(f"Bulk email sending completed successfully: {result}")
             else:
                 flash(f"Error: {result}")
-                logger.error(f"Bulk email sending failed for user {user_id}: {result}")
+                logger.error(f"Bulk email sending failed: {result}")
         except Exception as e:
             error_msg = f"Error in email sending task: {str(e)}"
             flash(error_msg)
@@ -1258,15 +1456,14 @@ def send_emails():
     thread.start()
     
     flash('Email sending started in background. Check the status page for real-time updates.')
-    logger.info(f"Email sending thread started successfully for user {user_id}")
+    logger.info("Email sending thread started successfully")
     return redirect(url_for('status'))
 
 @app.route('/manage_accounts')
 @login_required
 def manage_accounts():
     """Display email account management page"""
-    user_id = session['user_id']
-    account_stats = get_account_stats(user_id)
+    account_stats = get_account_stats(session['user_id'])
     return render_template('manage_accounts.html', account_stats=account_stats)
 
 @app.route('/add_account', methods=['POST'])
@@ -1391,7 +1588,7 @@ def log_details(log_id):
         log = cursor.fetchone()
         
         if not log:
-            flash('Log not found or access denied.')
+            flash('Log not found.')
             return redirect(url_for('logs'))
         
         # Get email statuses
@@ -1406,53 +1603,107 @@ def log_details(log_id):
     
     return render_template('log_details.html', log=log, email_statuses=email_statuses)
 
-@app.route('/profile')
-@login_required
-def profile():
-    """Display user profile"""
-    user_id = session['user_id']
-    user = get_user_by_id(user_id)
-    account_stats = get_account_stats(user_id)
-    
-    # Get user statistics
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Total emails sent
-        cursor.execute('''
-            SELECT SUM(sent_count) as total_sent, COUNT(*) as total_campaigns
-            FROM email_logs WHERE user_id = ?
-        ''', (user_id,))
-        stats = cursor.fetchone()
-        
-        total_sent = stats['total_sent'] or 0
-        total_campaigns = stats['total_campaigns'] or 0
-        
-        # Recent activity
-        cursor.execute('''
-            SELECT created_at, subject, sent_count, failed_count
-            FROM email_logs 
-            WHERE user_id = ?
-            ORDER BY created_at DESC
-            LIMIT 5
-        ''', (user_id,))
-        recent_activity = cursor.fetchall()
-    
-    user_stats = {
-        'total_sent': total_sent,
-        'total_campaigns': total_campaigns,
-        'total_accounts': len(account_stats),
-        'active_accounts': len([acc for acc in account_stats if acc['is_active']])
-    }
-    
-    return render_template('profile.html', user=user, user_stats=user_stats, recent_activity=recent_activity)
-
 # Health check endpoint for Render
 @app.route('/health')
 def health_check():
     """Health check endpoint for deployment platforms"""
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+@app.route('/forgot_password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip()
+        
+        if not email:
+            flash('Please enter your email address.', 'error')
+            return render_template('auth/forgot_password.html')
+        
+        # Check if user exists
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT email FROM users WHERE email = ? AND is_active = 1', (email,))
+            user = cursor.fetchone()
+            
+            if not user:
+                flash('If this email exists in our system, you will receive an OTP shortly.', 'info')
+                return render_template('auth/forgot_password.html')
+        
+        # Generate and send OTP
+        otp = generate_otp()
+        save_otp(email, otp)
+        
+        success, message = send_otp_email(email, otp)
+        if success:
+            flash('OTP sent to your email address. Check your inbox.', 'success')
+            return redirect(url_for('verify_otp', email=email))
+        else:
+            flash('Failed to send OTP. Please try again later.', 'error')
+            logger.error(f"Failed to send OTP to {email}: {message}")
+    
+    return render_template('auth/forgot_password.html')
+
+@app.route('/verify_otp')
+def verify_otp_page():
+    email = request.args.get('email')
+    if not email:
+        flash('Invalid request. Please start the password reset process again.', 'error')
+        return redirect(url_for('forgot_password'))
+    
+    return render_template('auth/verify_otp.html', email=email)
+
+@app.route('/verify_otp', methods=['POST'])
+def verify_otp_submit():
+    email = request.form.get('email', '').strip()
+    otp = request.form.get('otp', '').strip()
+    
+    if not email or not otp:
+        flash('Please enter the OTP.', 'error')
+        return render_template('auth/verify_otp.html', email=email)
+    
+    success, message = verify_otp(email, otp)
+    if success:
+        # Store email in session for password reset
+        session['reset_email'] = email
+        session['otp_verified'] = True
+        flash('OTP verified successfully. Please set your new password.', 'success')
+        return redirect(url_for('reset_password'))
+    else:
+        flash(message, 'error')
+        return render_template('auth/verify_otp.html', email=email)
+
+@app.route('/reset_password', methods=['GET', 'POST'])
+def reset_password():
+    # Check if OTP was verified
+    if not session.get('otp_verified') or not session.get('reset_email'):
+        flash('Please complete the OTP verification first.', 'error')
+        return redirect(url_for('forgot_password'))
+    
+    if request.method == 'POST':
+        password = request.form.get('password', '').strip()
+        confirm_password = request.form.get('confirm_password', '').strip()
+        
+        if not password or not confirm_password:
+            flash('Please enter both password fields.', 'error')
+            return render_template('auth/reset_password.html')
+        
+        if password != confirm_password:
+            flash('Passwords do not match.', 'error')
+            return render_template('auth/reset_password.html')
+        
+        if len(password) < 6:
+            flash('Password must be at least 6 characters long.', 'error')
+            return render_template('auth/reset_password.html')
+        
+        email = session.get('reset_email')
+        success, message = reset_user_password(email, password)
+        
+        if success:
+            # Clear session data
+            session.pop('reset_email', None)
+            session.pop('otp_verified', None)
+            flash('Password reset successfully! Please log in with your new password.', 'success')
+            return redirect(url_for('login'))
+        else:
+            flash(message, 'error')
+    
+    return render_template('auth/reset_password.html')

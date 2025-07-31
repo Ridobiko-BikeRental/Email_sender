@@ -1,4 +1,3 @@
-
 {% extends "base.html" %}
 
 {% block title %}Login - Bulk Email Sender{% endblock %}
@@ -12,11 +11,11 @@
         <div class="card-body">
             <form method="POST">
                 <div class="mb-3">
-                    <label for="username" class="form-label">Username:</label>
+                    <label for="email" class="form-label">Email Address:</label>
                     <div class="input-group">
-                        <span class="input-group-text"><i class="fas fa-user"></i></span>
-                        <input type="text" class="form-control" id="username" name="username" required 
-                               placeholder="Enter your username" value="{{ request.form.get('username', '') }}">
+                        <span class="input-group-text"><i class="fas fa-envelope"></i></span>
+                        <input type="email" class="form-control" id="email" name="email" required 
+                               placeholder="Enter your email address" value="{{ request.form.get('email', '') }}">
                     </div>
                 </div>
 
@@ -39,11 +38,18 @@
                 </div>
             </form>
             
+            <!-- Forgot Password Link -->
+            <div class="text-center mt-3">
+                <a href="{{ url_for('forgot_password') }}" class="text-decoration-none">
+                    <i class="fas fa-key"></i> Forgot your password?
+                </a>
+            </div>
+            
             <hr class="my-4">
             
             <div class="text-center">
                 <p class="mb-0">Don't have an account?</p>
-                <a href="{{ url_for('signup') }}" class="btn btn-outline-primary">
+                <a href="{{ url_for('signup') }}" class="btn btn-outline-success">
                     <i class="fas fa-user-plus"></i> Create Account
                 </a>
             </div>
@@ -58,7 +64,7 @@
         <div class="card-body">
             <p class="small mb-2"><strong>New to Bulk Email Sender?</strong></p>
             <ol class="small mb-0">
-                <li>Create your account using the sign up form</li>
+                <li>Create your account using your email address</li>
                 <li>Add your Gmail accounts with App Passwords</li>
                 <li>Upload your contact list (CSV/Excel)</li>
                 <li>Compose and send your bulk emails</li>
@@ -85,7 +91,7 @@ function togglePassword() {
 
 // Auto-focus on first input
 document.addEventListener('DOMContentLoaded', function() {
-    document.getElementById('username').focus();
+    document.getElementById('email').focus();
 });
 </script>
 {% endblock %}
