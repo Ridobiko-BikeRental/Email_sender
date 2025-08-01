@@ -633,7 +633,8 @@ def merge_cc_bcc_lists(form_cc, form_bcc, default_cc, default_bcc):
     
     return merged_cc, merged_bcc
 
-def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recipient_email, subject, body, cc_emails=None, bcc_emails=None, attachment_path=None):
+# Fix 1: Update send_email_smtp function signature and implementation
+def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recipient_email, subject, body, user_id, cc_emails=None, bcc_emails=None, attachment_path=None):
     """Send individual email via SMTP with CC, BCC, and attachment support"""
     try:
         msg = MIMEMultipart('alternative')
@@ -696,17 +697,17 @@ def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recip
         server.sendmail(sender_email, all_recipients, text)
         server.quit()
         
-        # Update the account's sent count in database
+        # Update the account's sent count in database - FIXED: Now includes user_id for proper isolation
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 UPDATE email_accounts 
                 SET sent_count = sent_count + 1 
-                WHERE email = ?
-            ''', (sender_email,))
+                WHERE email = ? AND user_id = ?
+            ''', (sender_email, user_id))
             conn.commit()
         
-        logger.info(f"Email sent successfully to {recipient_email} from {sender_email}")
+        logger.info(f"Email sent successfully to {recipient_email} from {sender_email} for user {user_id}")
         return True, "Email sent successfully"
     except Exception as e:
         error_msg = str(e)
@@ -797,7 +798,7 @@ def send_bulk_emails(user_id, file_path, subject, template, email_column, delay=
         
         success, error_msg = send_email_smtp(
             smtp_server, smtp_port, current_sender, current_password,
-            recipient_email, subject, personalized_message, merged_cc, merged_bcc, attachment_path
+            recipient_email, subject, personalized_message, user_id, merged_cc, merged_bcc, attachment_path
         )
         
         if success:
@@ -942,7 +943,7 @@ def send_bulk_emails_single_sender(user_id, file_path, sender_email, subject, te
         
         success, error_msg = send_email_smtp(
             smtp_server, smtp_port, sender_email, sender_password,
-            recipient_email, subject, personalized_message, merged_cc, merged_bcc, attachment_path
+            recipient_email, subject, personalized_message, user_id, merged_cc, merged_bcc, attachment_path
         )
         
         if success:
