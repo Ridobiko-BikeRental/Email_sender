@@ -6,3 +6,5 @@ python-dotenv==1.0.0
 gunicorn==21.2.0
 Werkzeug==2.3.7
 psycopg[binary]==3.2.9
+psycopg-pool==3.2.4
+psycopg.rows==3.2.4
