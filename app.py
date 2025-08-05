@@ -1,7 +1,12 @@
 import os
 import csv
+import json
+import time
 import smtplib
-import sqlite3
+import logging
+import html
+import string
+import random
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
@@ -10,19 +15,16 @@ from email import encoders
 from flask import Flask, render_template, request, flash, redirect, url_for, jsonify, session
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
-import time
 from threading import Thread
-import logging
-from datetime import datetime, date
-import json
+from datetime import datetime, date, timedelta
 from dotenv import load_dotenv
 from openpyxl import load_workbook
-import html
 from contextlib import contextmanager
 from functools import wraps
-import random
-import string
-from datetime import datetime, timedelta
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2 import pool
+import urllib.parse
 
 # Load environment variables
 load_dotenv()
@@ -37,7 +39,6 @@ ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
 ALLOWED_ATTACHMENT_EXTENSIONS = {'pdf', 'doc', 'docx', 'txt', 'jpg', 'jpeg', 'png', 'gif'}
 MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB max file size
 LOGS_FOLDER = 'logs'
-DATABASE_PATH = 'email_system.db'
 EMAIL_LIMIT_PER_ACCOUNT = 15  # Limit per account
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -62,15 +63,46 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# PostgreSQL Configuration
+def get_database_url():
+    """Get database URL from environment variables"""
+    database_url = os.getenv('DATABASE_URL')
+    if database_url:
+        # Parse the URL to handle SSL requirements for production
+        if database_url.startswith('postgres://'):
+            database_url = database_url.replace('postgres://', 'postgresql://', 1)
+        return database_url
+    else:
+        # Local development configuration
+        return f"postgresql://{os.getenv('DB_USER', 'postgres')}:{os.getenv('DB_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'email_system')}"
+
+# Create connection pool
+try:
+    connection_pool = psycopg2.pool.SimpleConnectionPool(
+        1, 20,
+        get_database_url()
+    )
+    if connection_pool:
+        logger.info("PostgreSQL connection pool created successfully")
+except Exception as e:
+    logger.error(f"Error creating connection pool: {e}")
+    connection_pool = None
+
 # Database context manager
 @contextmanager
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
+    """Get database connection from pool"""
+    if not connection_pool:
+        raise Exception("Database connection pool not available")
+    
+    conn = connection_pool.getconn()
     try:
         yield conn
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
-        conn.close()
+        connection_pool.putconn(conn)
 
 # Authentication decorator
 def login_required(f):
@@ -84,106 +116,107 @@ def login_required(f):
 
 # Initialize database
 def init_database():
-    """Initialize SQLite database with required tables"""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Create users table (removed username, email is now primary identifier)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                full_name TEXT NOT NULL,
-                is_active BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_login TIMESTAMP
-            )
-        ''')
-        
-        # Create email accounts table with user_id foreign key
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS email_accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                email TEXT NOT NULL,
-                password TEXT NOT NULL,
-                is_active BOOLEAN DEFAULT 1,
-                sent_count INTEGER DEFAULT 0,
-                last_reset DATE DEFAULT CURRENT_DATE,
-                default_cc TEXT DEFAULT '',
-                default_bcc TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (id),
-                UNIQUE(user_id, email)
-            )
-        ''')
-        
-        # Add user_id column if it doesn't exist (for existing databases)
-        try:
-            cursor.execute('ALTER TABLE email_accounts ADD COLUMN user_id INTEGER')
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        
-        # Add default_cc and default_bcc columns if they don't exist
-        try:
-            cursor.execute('ALTER TABLE email_accounts ADD COLUMN default_cc TEXT DEFAULT ""')
-        except sqlite3.OperationalError:
-            pass
-        
-        try:
-            cursor.execute('ALTER TABLE email_accounts ADD COLUMN default_bcc TEXT DEFAULT ""')
-        except sqlite3.OperationalError:
-            pass
-        
-        # Create email logs table with user_id
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS email_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                log_filename TEXT NOT NULL,
-                sender_email TEXT,
-                sender_mode TEXT,
-                total_emails INTEGER,
-                sent_count INTEGER,
-                failed_count INTEGER,
-                duration_seconds REAL,
-                subject TEXT,
-                cc_emails TEXT,
-                bcc_emails TEXT,
-                attachment_name TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                log_data TEXT,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        ''')
-        
-        # Add user_id column to email_logs if it doesn't exist
-        try:
-            cursor.execute('ALTER TABLE email_logs ADD COLUMN user_id INTEGER')
-        except sqlite3.OperationalError:
-            pass
-        
-        # Create individual email status table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS email_status (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                log_id INTEGER,
-                recipient_email TEXT,
-                sender_email TEXT,
-                status TEXT,
-                error_message TEXT,
-                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (log_id) REFERENCES email_logs (id)
-            )
-        ''')
-        
-        conn.commit()
-        logger.info("Database initialized successfully")
+    """Initialize PostgreSQL database with required tables"""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                
+                # Create users table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        email VARCHAR(255) UNIQUE NOT NULL,
+                        password_hash VARCHAR(255) NOT NULL,
+                        full_name VARCHAR(255) NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_login TIMESTAMP
+                    )
+                ''')
+                
+                # Create email accounts table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS email_accounts (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        email VARCHAR(255) NOT NULL,
+                        password TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        sent_count INTEGER DEFAULT 0,
+                        last_reset DATE DEFAULT CURRENT_DATE,
+                        default_cc TEXT DEFAULT '',
+                        default_bcc TEXT DEFAULT '',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, email)
+                    )
+                ''')
+                
+                # Create email logs table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS email_logs (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        log_filename VARCHAR(255) NOT NULL,
+                        sender_email VARCHAR(255),
+                        sender_mode VARCHAR(50),
+                        total_emails INTEGER,
+                        sent_count INTEGER,
+                        failed_count INTEGER,
+                        duration_seconds REAL,
+                        subject TEXT,
+                        cc_emails TEXT,
+                        bcc_emails TEXT,
+                        attachment_name VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        log_data JSONB
+                    )
+                ''')
+                
+                # Create email status table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS email_status (
+                        id SERIAL PRIMARY KEY,
+                        log_id INTEGER REFERENCES email_logs(id) ON DELETE CASCADE,
+                        recipient_email VARCHAR(255),
+                        sender_email VARCHAR(255),
+                        status VARCHAR(50),
+                        error_message TEXT,
+                        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                
+                # Create password reset OTP table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS password_reset_otp (
+                        id SERIAL PRIMARY KEY,
+                        email VARCHAR(255) NOT NULL,
+                        otp VARCHAR(10) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP NOT NULL,
+                        used BOOLEAN DEFAULT FALSE
+                    )
+                ''')
+                
+                # Create indexes for better performance
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_email_accounts_user_id ON email_accounts(user_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_email_accounts_email ON email_accounts(email)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_email_logs_user_id ON email_logs(user_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_email_status_log_id ON email_status(log_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_password_reset_email ON password_reset_otp(email)')
+                
+                conn.commit()
+                logger.info("PostgreSQL database initialized successfully")
+                
+    except Exception as e:
+        logger.error(f"Error initializing database: {e}")
+        raise e
 
 # Initialize database on startup
-init_database()
+try:
+    init_database()
+except Exception as e:
+    logger.error(f"Failed to initialize database: {e}")
 
 # Global variable to store current email sending status (per user)
 email_status = {}
@@ -210,100 +243,101 @@ def get_user_email_status(user_id):
 
 # User management functions
 def create_user(email, password, full_name):
-    """Create a new user (removed username parameter)"""
+    """Create a new user"""
     try:
         password_hash = generate_password_hash(password)
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO users (email, password_hash, full_name)
-                VALUES (?, ?, ?)
-            ''', (email, password_hash, full_name))
-            conn.commit()
-            user_id = cursor.lastrowid
-            logger.info(f"Created user: {email}")
-            return True, user_id
-    except sqlite3.IntegrityError:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                    INSERT INTO users (email, password_hash, full_name)
+                    VALUES (%s, %s, %s)
+                    RETURNING id
+                ''', (email, password_hash, full_name))
+                user_id = cursor.fetchone()[0]
+                conn.commit()
+                logger.info(f"Created user: {email}")
+                return True, user_id
+    except psycopg2.IntegrityError:
         return False, "Email address already exists"
     except Exception as e:
         logger.error(f"Error creating user: {e}")
         return False, f"Error creating user: {str(e)}"
 
 def authenticate_user(email, password):
-    """Authenticate user login (changed from username to email)"""
+    """Authenticate user login"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT id, email, password_hash, full_name, is_active
-                FROM users 
-                WHERE email = ? AND is_active = 1
-            ''', (email,))
-            user = cursor.fetchone()
-            
-            if user and check_password_hash(user['password_hash'], password):
-                # Update last login
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute('''
-                    UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?
-                ''', (user['id'],))
-                conn.commit()
-                return True, dict(user)
-            return False, "Invalid email or password"
+                    SELECT id, email, password_hash, full_name, is_active
+                    FROM users 
+                    WHERE email = %s AND is_active = TRUE
+                ''', (email,))
+                user = cursor.fetchone()
+                
+                if user and check_password_hash(user['password_hash'], password):
+                    # Update last login
+                    cursor.execute('''
+                        UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = %s
+                    ''', (user['id'],))
+                    conn.commit()
+                    return True, dict(user)
+                return False, "Invalid email or password"
     except Exception as e:
         logger.error(f"Error authenticating user: {e}")
         return False, "Authentication error"
 
 def get_user_by_id(user_id):
-    """Get user by ID (removed username from query)"""
+    """Get user by ID"""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, email, full_name, created_at, last_login
-            FROM users 
-            WHERE id = ? AND is_active = 1
-        ''', (user_id,))
-        return cursor.fetchone()
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, email, full_name, created_at, last_login
+                FROM users 
+                WHERE id = %s AND is_active = TRUE
+            ''', (user_id,))
+            return cursor.fetchone()
 
-# Database functions (updated with user_id)
+# Database functions (updated with PostgreSQL syntax)
 def get_email_accounts(user_id):
     """Get all email accounts for a specific user"""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, email, password, is_active, sent_count, last_reset, 
-                   default_cc, default_bcc, created_at 
-            FROM email_accounts 
-            WHERE user_id = ? AND is_active = 1 
-            ORDER BY created_at
-        ''', (user_id,))
-        return cursor.fetchall()
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, email, password, is_active, sent_count, last_reset, 
+                       default_cc, default_bcc, created_at 
+                FROM email_accounts 
+                WHERE user_id = %s AND is_active = TRUE 
+                ORDER BY created_at
+            ''', (user_id,))
+            return cursor.fetchall()
 
 def get_all_email_accounts(user_id):
     """Get all email accounts for a user including inactive ones"""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, email, password, is_active, sent_count, last_reset, 
-                   default_cc, default_bcc, created_at 
-            FROM email_accounts 
-            WHERE user_id = ?
-            ORDER BY created_at
-        ''', (user_id,))
-        return cursor.fetchall()
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, email, password, is_active, sent_count, last_reset, 
+                       default_cc, default_bcc, created_at 
+                FROM email_accounts 
+                WHERE user_id = %s
+                ORDER BY created_at
+            ''', (user_id,))
+            return cursor.fetchall()
 
 def add_email_account(user_id, email, password, default_cc='', default_bcc=''):
     """Add new email account to database for a specific user"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO email_accounts (user_id, email, password, default_cc, default_bcc) 
-                VALUES (?, ?, ?, ?, ?)
-            ''', (user_id, email, password, default_cc, default_bcc))
-            conn.commit()
-            logger.info(f"Added email account: {email} for user {user_id}")
-            return True, "Email account added successfully"
-    except sqlite3.IntegrityError:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                    INSERT INTO email_accounts (user_id, email, password, default_cc, default_bcc) 
+                    VALUES (%s, %s, %s, %s, %s)
+                ''', (user_id, email, password, default_cc, default_bcc))
+                conn.commit()
+                logger.info(f"Added email account: {email} for user {user_id}")
+                return True, "Email account added successfully"
+    except psycopg2.IntegrityError:
         return False, "Email account already exists for this user"
     except Exception as e:
         logger.error(f"Error adding email account: {e}")
@@ -313,20 +347,21 @@ def update_email_account(user_id, account_id, email, password, is_active, defaul
     """Update email account for a specific user"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE email_accounts 
-                SET email = ?, password = ?, is_active = ?, default_cc = ?, default_bcc = ?, 
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ?
-            ''', (email, password, is_active, default_cc, default_bcc, account_id, user_id))
-            conn.commit()
-            if cursor.rowcount > 0:
-                logger.info(f"Updated email account ID: {account_id} for user {user_id}")
-                return True, "Email account updated successfully"
-            else:
-                return False, "Email account not found or access denied"
-    except sqlite3.IntegrityError:
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                    UPDATE email_accounts 
+                    SET email = %s, password = %s, is_active = %s, default_cc = %s, default_bcc = %s, 
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s AND user_id = %s
+                ''', (email, password, is_active, default_cc, default_bcc, account_id, user_id))
+                
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"Updated email account ID: {account_id} for user {user_id}")
+                    return True, "Email account updated successfully"
+                else:
+                    return False, "Email account not found or access denied"
+    except psycopg2.IntegrityError:
         return False, "Email address already exists"
     except Exception as e:
         logger.error(f"Error updating email account: {e}")
@@ -336,14 +371,15 @@ def delete_email_account(user_id, account_id):
     """Delete email account for a specific user"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM email_accounts WHERE id = ? AND user_id = ?', (account_id, user_id))
-            conn.commit()
-            if cursor.rowcount > 0:
-                logger.info(f"Deleted email account ID: {account_id} for user {user_id}")
-                return True, "Email account deleted successfully"
-            else:
-                return False, "Email account not found or access denied"
+            with conn.cursor() as cursor:
+                cursor.execute('DELETE FROM email_accounts WHERE id = %s AND user_id = %s', (account_id, user_id))
+                
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"Deleted email account ID: {account_id} for user {user_id}")
+                    return True, "Email account deleted successfully"
+                else:
+                    return False, "Email account not found or access denied"
     except Exception as e:
         logger.error(f"Error deleting email account: {e}")
         return False, f"Error deleting email account: {str(e)}"
@@ -351,62 +387,62 @@ def delete_email_account(user_id, account_id):
 def get_account_default_cc_bcc(user_id, sender_email):
     """Get default CC and BCC for a specific account and user"""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT default_cc, default_bcc 
-            FROM email_accounts 
-            WHERE user_id = ? AND email = ? AND is_active = 1
-        ''', (user_id, sender_email))
-        result = cursor.fetchone()
-        if result:
-            return result['default_cc'] or '', result['default_bcc'] or ''
-        return '', ''
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT default_cc, default_bcc 
+                FROM email_accounts 
+                WHERE user_id = %s AND email = %s AND is_active = TRUE
+            ''', (user_id, sender_email))
+            result = cursor.fetchone()
+            if result:
+                return result['default_cc'] or '', result['default_bcc'] or ''
+            return '', ''
 
 def reset_daily_counts(user_id):
     """Reset email counts daily for a specific user"""
     today = date.today()
     
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE email_accounts 
-            SET sent_count = 0, last_reset = ? 
-            WHERE user_id = ? AND last_reset < ?
-        ''', (today, user_id, today))
-        
-        if cursor.rowcount > 0:
-            conn.commit()
-            logger.info(f"Reset email count for {cursor.rowcount} accounts for user {user_id}")
+        with conn.cursor() as cursor:
+            cursor.execute('''
+                UPDATE email_accounts 
+                SET sent_count = 0, last_reset = %s 
+                WHERE user_id = %s AND last_reset < %s
+            ''', (today, user_id, today))
+            
+            if cursor.rowcount > 0:
+                conn.commit()
+                logger.info(f"Reset email count for {cursor.rowcount} accounts for user {user_id}")
 
 def get_available_sender(user_id):
     """Get next available sender account for a specific user"""
     reset_daily_counts(user_id)
     
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT email, password, default_cc, default_bcc FROM email_accounts 
-            WHERE user_id = ? AND is_active = 1 AND sent_count < ? 
-            ORDER BY sent_count ASC, created_at ASC 
-            LIMIT 1
-        ''', (user_id, EMAIL_LIMIT_PER_ACCOUNT))
-        
-        result = cursor.fetchone()
-        if result:
-            return result['email'], result['password'], result['default_cc'], result['default_bcc']
-        
-        # If all accounts have reached the limit, return the first active one
-        cursor.execute('''
-            SELECT email, password, default_cc, default_bcc FROM email_accounts 
-            WHERE user_id = ? AND is_active = 1 
-            ORDER BY created_at ASC 
-            LIMIT 1
-        ''', (user_id,))
-        
-        result = cursor.fetchone()
-        if result:
-            logger.warning(f"All accounts have reached daily limit for user {user_id}. Using {result['email']}")
-            return result['email'], result['password'], result['default_cc'], result['default_bcc']
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT email, password, default_cc, default_bcc FROM email_accounts 
+                WHERE user_id = %s AND is_active = TRUE AND sent_count < %s 
+                ORDER BY sent_count ASC, created_at ASC 
+                LIMIT 1
+            ''', (user_id, EMAIL_LIMIT_PER_ACCOUNT))
+            
+            result = cursor.fetchone()
+            if result:
+                return result['email'], result['password'], result['default_cc'], result['default_bcc']
+            
+            # If all accounts have reached the limit, return the first active one
+            cursor.execute('''
+                SELECT email, password, default_cc, default_bcc FROM email_accounts 
+                WHERE user_id = %s AND is_active = TRUE 
+                ORDER BY created_at ASC 
+                LIMIT 1
+            ''', (user_id,))
+            
+            result = cursor.fetchone()
+            if result:
+                logger.warning(f"All accounts have reached daily limit for user {user_id}. Using {result['email']}")
+                return result['email'], result['password'], result['default_cc'], result['default_bcc']
     
     return None, None, None, None
 
@@ -415,83 +451,84 @@ def get_account_stats(user_id):
     reset_daily_counts(user_id)
     
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, email, sent_count, is_active, default_cc, default_bcc, created_at
-            FROM email_accounts 
-            WHERE user_id = ?
-            ORDER BY created_at
-        ''', (user_id,))
-        
-        accounts = cursor.fetchall()
-        stats = []
-        
-        for account in accounts:
-            remaining = EMAIL_LIMIT_PER_ACCOUNT - account['sent_count'] if account['is_active'] else 0
-            stats.append({
-                'id': account['id'],
-                'email': account['email'],
-                'sent_today': account['sent_count'],
-                'remaining': remaining,
-                'limit': EMAIL_LIMIT_PER_ACCOUNT,
-                'percentage_used': (account['sent_count'] / EMAIL_LIMIT_PER_ACCOUNT) * 100,
-                'is_active': account['is_active'],
-                'default_cc': account['default_cc'] or '',
-                'default_bcc': account['default_bcc'] or '',
-                'created_at': account['created_at']
-            })
-        
-        return stats
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, email, sent_count, is_active, default_cc, default_bcc, created_at
+                FROM email_accounts 
+                WHERE user_id = %s
+                ORDER BY created_at
+            ''', (user_id,))
+            
+            accounts = cursor.fetchall()
+            stats = []
+            
+            for account in accounts:
+                remaining = EMAIL_LIMIT_PER_ACCOUNT - account['sent_count'] if account['is_active'] else 0
+                stats.append({
+                    'id': account['id'],
+                    'email': account['email'],
+                    'sent_today': account['sent_count'],
+                    'remaining': remaining,
+                    'limit': EMAIL_LIMIT_PER_ACCOUNT,
+                    'percentage_used': (account['sent_count'] / EMAIL_LIMIT_PER_ACCOUNT) * 100,
+                    'is_active': account['is_active'],
+                    'default_cc': account['default_cc'] or '',
+                    'default_bcc': account['default_bcc'] or '',
+                    'created_at': account['created_at']
+                })
+            
+            return stats
 
 def save_email_log(user_id, log_data, log_filename):
     """Save email log to database for a specific user"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Insert main log entry
-            cursor.execute('''
-                INSERT INTO email_logs 
-                (user_id, log_filename, sender_email, sender_mode, total_emails, sent_count, 
-                 failed_count, duration_seconds, subject, cc_emails, bcc_emails, 
-                 attachment_name, log_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                user_id,
-                log_filename,
-                log_data.get('sender_email'),
-                log_data.get('sender_mode', 'auto'),
-                log_data.get('total_emails', 0),
-                log_data.get('sent_count', 0),
-                log_data.get('failed_count', 0),
-                log_data.get('duration_seconds', 0),
-                log_data.get('subject', ''),
-                ', '.join(log_data.get('cc_emails', [])),
-                ', '.join(log_data.get('bcc_emails', [])),
-                log_data.get('attachment_name', ''),
-                json.dumps(log_data)
-            ))
-            
-            log_id = cursor.lastrowid
-            
-            # Insert individual email statuses
-            for email in log_data.get('success_emails', []):
+            with conn.cursor() as cursor:
+                
+                # Insert main log entry
                 cursor.execute('''
-                    INSERT INTO email_status (log_id, recipient_email, sender_email, status)
-                    VALUES (?, ?, ?, ?)
-                ''', (log_id, email, log_data.get('sender_email'), 'success'))
-            
-            for failed_entry in log_data.get('failed_emails', []):
-                if ':' in failed_entry:
-                    email, error = failed_entry.split(':', 1)
+                    INSERT INTO email_logs 
+                    (user_id, log_filename, sender_email, sender_mode, total_emails, sent_count, 
+                     failed_count, duration_seconds, subject, cc_emails, bcc_emails, 
+                     attachment_name, log_data)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                ''', (
+                    user_id,
+                    log_filename,
+                    log_data.get('sender_email'),
+                    log_data.get('sender_mode', 'auto'),
+                    log_data.get('total_emails', 0),
+                    log_data.get('sent_count', 0),
+                    log_data.get('failed_count', 0),
+                    log_data.get('duration_seconds', 0),
+                    log_data.get('subject', ''),
+                    ', '.join(log_data.get('cc_emails', [])),
+                    ', '.join(log_data.get('bcc_emails', [])),
+                    log_data.get('attachment_name', ''),
+                    json.dumps(log_data)
+                ))
+                
+                log_id = cursor.fetchone()[0]
+                
+                # Insert individual email statuses
+                for email in log_data.get('success_emails', []):
                     cursor.execute('''
-                        INSERT INTO email_status (log_id, recipient_email, sender_email, status, error_message)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (log_id, email.strip(), log_data.get('sender_email'), 'failed', error.strip()))
-            
-            conn.commit()
-            logger.info(f"Saved email log to database: {log_filename} for user {user_id}")
-            
+                        INSERT INTO email_status (log_id, recipient_email, sender_email, status)
+                        VALUES (%s, %s, %s, %s)
+                    ''', (log_id, email, log_data.get('sender_email'), 'success'))
+                
+                for failed_entry in log_data.get('failed_emails', []):
+                    if ':' in failed_entry:
+                        email_addr, error = failed_entry.split(':', 1)
+                        cursor.execute('''
+                            INSERT INTO email_status (log_id, recipient_email, sender_email, status, error_message)
+                            VALUES (%s, %s, %s, %s, %s)
+                        ''', (log_id, email_addr.strip(), log_data.get('sender_email'), 'failed', error.strip()))
+                
+                conn.commit()
+                logger.info(f"Saved email log to database: {log_filename} for user {user_id}")
+                
     except Exception as e:
         logger.error(f"Error saving email log to database: {e}")
 
@@ -633,7 +670,6 @@ def merge_cc_bcc_lists(form_cc, form_bcc, default_cc, default_bcc):
     
     return merged_cc, merged_bcc
 
-# Fix 1: Update send_email_smtp function signature and implementation
 def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recipient_email, subject, body, user_id, cc_emails=None, bcc_emails=None, attachment_path=None):
     """Send individual email via SMTP with CC, BCC, and attachment support"""
     try:
@@ -697,15 +733,15 @@ def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recip
         server.sendmail(sender_email, all_recipients, text)
         server.quit()
         
-        # Update the account's sent count in database - FIXED: Now includes user_id for proper isolation
+        # Update the account's sent count in database
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE email_accounts 
-                SET sent_count = sent_count + 1 
-                WHERE email = ? AND user_id = ?
-            ''', (sender_email, user_id))
-            conn.commit()
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                    UPDATE email_accounts 
+                    SET sent_count = sent_count + 1 
+                    WHERE email = %s AND user_id = %s
+                ''', (sender_email, user_id))
+                conn.commit()
         
         logger.info(f"Email sent successfully to {recipient_email} from {sender_email} for user {user_id}")
         return True, "Email sent successfully"
@@ -714,294 +750,7 @@ def send_email_smtp(smtp_server, smtp_port, sender_email, sender_password, recip
         logger.error(f"Failed to send email to {recipient_email} from {sender_email}: {error_msg}")
         return False, error_msg
 
-def send_bulk_emails(user_id, file_path, subject, template, email_column, delay=1, cc_emails=None, bcc_emails=None, attachment_path=None):
-    """Send bulk emails in background with automatic sender rotation for a specific user"""
-    user_status = get_user_email_status(user_id)
-    
-    # Check if we have any email accounts configured
-    accounts = get_email_accounts(user_id)
-    if not accounts:
-        return False, "No email accounts configured. Please add email accounts first."
-    
-    # Parse CC and BCC emails from form
-    form_cc_list = parse_email_list(cc_emails) if cc_emails else []
-    form_bcc_list = parse_email_list(bcc_emails) if bcc_emails else []
-    
-    # Reset status
-    user_status.update({
-        'is_sending': True,
-        'total_emails': 0,
-        'sent_count': 0,
-        'failed_count': 0,
-        'current_email': '',
-        'current_sender': '',
-        'sender_rotation': {},
-        'start_time': datetime.now(),
-        'failed_emails': [],
-        'success_emails': [],
-        'attachment_name': os.path.basename(attachment_path) if attachment_path else None,
-        'cc_emails': form_cc_list,
-        'bcc_emails': form_bcc_list
-    })
-    
-    df = read_file(file_path)
-    if df is None:
-        user_status['is_sending'] = False
-        return False, "Failed to read file"
-    
-    if email_column not in df.columns:
-        user_status['is_sending'] = False
-        return False, f"Column '{email_column}' not found in file"
-    
-    # Filter out empty emails and count total
-    valid_emails = [row for row in df.data if row.get(email_column, '').strip()]
-    user_status['total_emails'] = len(valid_emails)
-    
-    logger.info(f"Starting bulk email sending to {user_status['total_emails']} recipients for user {user_id}")
-    
-    smtp_server = "smtp.gmail.com"
-    smtp_port = 587
-    
-    current_sender = None
-    current_password = None
-    current_default_cc = None
-    current_default_bcc = None
-    emails_sent_with_current = 0
-    
-    for index, row in enumerate(valid_emails):
-        recipient_email = row.get(email_column, '').strip()
-        user_status['current_email'] = recipient_email
-        
-        # Get next available sender if current one reached limit or is None
-        if (current_sender is None or emails_sent_with_current >= EMAIL_LIMIT_PER_ACCOUNT):
-            current_sender, current_password, current_default_cc, current_default_bcc = get_available_sender(user_id)
-            emails_sent_with_current = 0
-            
-            if current_sender is None:
-                logger.error(f"No available sender accounts for user {user_id}")
-                break
-        
-        user_status['current_sender'] = current_sender
-        
-        # Merge form CC/BCC with default CC/BCC for current sender
-        merged_cc, merged_bcc = merge_cc_bcc_lists(
-            cc_emails, bcc_emails, current_default_cc, current_default_bcc
-        )
-        
-        # Replace placeholders in template with row data
-        personalized_message = template
-        for col in df.columns:
-            placeholder = f"{{{col}}}"
-            if placeholder in personalized_message:
-                value = row.get(col, "")
-                personalized_message = personalized_message.replace(placeholder, str(value))
-        
-        success, error_msg = send_email_smtp(
-            smtp_server, smtp_port, current_sender, current_password,
-            recipient_email, subject, personalized_message, user_id, merged_cc, merged_bcc, attachment_path
-        )
-        
-        if success:
-            user_status['sent_count'] += 1
-            user_status['success_emails'].append(recipient_email)
-            emails_sent_with_current += 1
-            
-            # Track which sender sent to which recipients
-            if current_sender not in user_status['sender_rotation']:
-                user_status['sender_rotation'][current_sender] = 0
-            user_status['sender_rotation'][current_sender] += 1
-        else:
-            user_status['failed_count'] += 1
-            user_status['failed_emails'].append(f"{recipient_email}: {error_msg}")
-        
-        # Add delay between emails to avoid being flagged as spam
-        time.sleep(delay)
-    
-    # Email sending completed
-    user_status['is_sending'] = False
-    end_time = datetime.now()
-    duration = end_time - user_status['start_time']
-    
-    # Save detailed log to file and database
-    log_data = {
-        'timestamp': end_time.isoformat(),
-        'duration_seconds': duration.total_seconds(),
-        'total_emails': user_status['total_emails'],
-        'sent_count': user_status['sent_count'],
-        'failed_count': user_status['failed_count'],
-        'success_emails': user_status['success_emails'],
-        'failed_emails': user_status['failed_emails'],
-        'subject': subject,
-        'sender_mode': 'auto',
-        'sender_rotation': user_status['sender_rotation'],
-        'cc_emails': form_cc_list,
-        'bcc_emails': form_bcc_list,
-        'attachment_name': os.path.basename(attachment_path) if attachment_path else '',
-        'account_stats': get_account_stats(user_id)
-    }
-    
-    log_filename = f"bulk_email_log_{user_id}_{end_time.strftime('%Y%m%d_%H%M%S')}.json"
-    
-    # Save to file
-    with open(os.path.join(LOGS_FOLDER, log_filename), 'w') as f:
-        json.dump(log_data, f, indent=2)
-    
-    # Save to database
-    save_email_log(user_id, log_data, log_filename)
-    
-    logger.info(f"Bulk email sending completed for user {user_id}. {user_status['sent_count']} sent, {user_status['failed_count']} failed. Duration: {duration}")
-    
-    return True, {
-        'success_count': user_status['sent_count'],
-        'failed_count': user_status['failed_count'],
-        'failed_emails': user_status['failed_emails'],
-        'duration': str(duration),
-        'log_file': log_filename,
-        'sender_rotation': user_status['sender_rotation']
-    }
-
-def send_bulk_emails_single_sender(user_id, file_path, sender_email, subject, template, email_column, delay=1, cc_emails=None, bcc_emails=None, attachment_path=None):
-    """Send bulk emails using a single specific sender for a specific user"""
-    user_status = get_user_email_status(user_id)
-    
-    # Check if sender exists and has quota
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT email, password, sent_count, is_active, default_cc, default_bcc
-            FROM email_accounts 
-            WHERE user_id = ? AND email = ? AND is_active = 1
-        ''', (user_id, sender_email))
-        
-        account = cursor.fetchone()
-        if not account:
-            return False, "Selected sender account not found or inactive"
-        
-        reset_daily_counts(user_id)
-        if account['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
-            return False, f"Selected account has reached daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails"
-        
-        sender_password = account['password']
-        default_cc = account['default_cc'] or ''
-        default_bcc = account['default_bcc'] or ''
-    
-    # Merge form CC/BCC with default CC/BCC
-    merged_cc, merged_bcc = merge_cc_bcc_lists(cc_emails, bcc_emails, default_cc, default_bcc)
-    
-    # Reset status
-    user_status.update({
-        'is_sending': True,
-        'total_emails': 0,
-        'sent_count': 0,
-        'failed_count': 0,
-        'current_email': '',
-        'current_sender': sender_email,
-        'sender_rotation': {sender_email: 0},
-        'start_time': datetime.now(),
-        'failed_emails': [],
-        'success_emails': [],
-        'attachment_name': os.path.basename(attachment_path) if attachment_path else None,
-        'cc_emails': merged_cc,
-        'bcc_emails': merged_bcc
-    })
-    
-    df = read_file(file_path)
-    if df is None:
-        user_status['is_sending'] = False
-        return False, "Failed to read file"
-    
-    if email_column not in df.columns:
-        user_status['is_sending'] = False
-        return False, f"Column '{email_column}' not found in file"
-    
-    # Filter out empty emails and count total
-    valid_emails = [row for row in df.data if row.get(email_column, '').strip()]
-    user_status['total_emails'] = len(valid_emails)
-    
-    # Check if we can send all emails with this account
-    remaining_quota = EMAIL_LIMIT_PER_ACCOUNT - account['sent_count']
-    if len(valid_emails) > remaining_quota:
-        user_status['is_sending'] = False
-        return False, f"Cannot send {len(valid_emails)} emails. Account {sender_email} has only {remaining_quota} emails remaining today."
-    
-    logger.info(f"Starting bulk email sending to {user_status['total_emails']} recipients from {sender_email} for user {user_id}")
-    
-    smtp_server = "smtp.gmail.com"
-    smtp_port = 587
-    
-    for index, row in enumerate(valid_emails):
-        recipient_email = row.get(email_column, '').strip()
-        user_status['current_email'] = recipient_email
-        
-        # Replace placeholders in template with row data
-        personalized_message = template
-        for col in df.columns:
-            placeholder = f"{{{col}}}"
-            if placeholder in personalized_message:
-                value = row.get(col, "")
-                personalized_message = personalized_message.replace(placeholder, str(value))
-        
-        success, error_msg = send_email_smtp(
-            smtp_server, smtp_port, sender_email, sender_password,
-            recipient_email, subject, personalized_message, user_id, merged_cc, merged_bcc, attachment_path
-        )
-        
-        if success:
-            user_status['sent_count'] += 1
-            user_status['success_emails'].append(recipient_email)
-            user_status['sender_rotation'][sender_email] += 1
-        else:
-            user_status['failed_count'] += 1
-            user_status['failed_emails'].append(f"{recipient_email}: {error_msg}")
-        
-        # Add delay between emails to avoid being flagged as spam
-        time.sleep(delay)
-    
-    # Email sending completed
-    user_status['is_sending'] = False
-    end_time = datetime.now()
-    duration = end_time - user_status['start_time']
-    
-    # Save detailed log to file and database
-    log_data = {
-        'timestamp': end_time.isoformat(),
-        'duration_seconds': duration.total_seconds(),
-        'total_emails': user_status['total_emails'],
-        'sent_count': user_status['sent_count'],
-        'failed_count': user_status['failed_count'],
-        'success_emails': user_status['success_emails'],
-        'failed_emails': user_status['failed_emails'],
-        'subject': subject,
-        'sender_email': sender_email,
-        'sender_mode': 'manual',
-        'sender_rotation': user_status['sender_rotation'],
-        'cc_emails': merged_cc,
-        'bcc_emails': merged_bcc,
-        'attachment_name': os.path.basename(attachment_path) if attachment_path else '',
-        'account_stats': get_account_stats(user_id)
-    }
-    
-    log_filename = f"bulk_email_log_{user_id}_{end_time.strftime('%Y%m%d_%H%M%S')}.json"
-    
-    # Save to file
-    with open(os.path.join(LOGS_FOLDER, log_filename), 'w') as f:
-        json.dump(log_data, f, indent=2)
-    
-    # Save to database
-    save_email_log(user_id, log_data, log_filename)
-    
-    logger.info(f"Bulk email sending completed from {sender_email} for user {user_id}. {user_status['sent_count']} sent, {user_status['failed_count']} failed. Duration: {duration}")
-    
-    return True, {
-        'success_count': user_status['sent_count'],
-        'failed_count': user_status['failed_count'],
-        'failed_emails': user_status['failed_emails'],
-        'duration': str(duration),
-        'log_file': log_filename,
-        'sender_rotation': user_status['sender_rotation']
-    }
-
-# OTP management functions
+# OTP management functions (updated for PostgreSQL)
 def generate_otp():
     """Generate a 6-digit OTP"""
     return ''.join(random.choices(string.digits, k=6))
@@ -1009,58 +758,45 @@ def generate_otp():
 def save_otp(email, otp):
     """Save OTP to database with expiration"""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        # Create OTP table if it doesn't exist
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS password_reset_otp (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL,
-                otp TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP NOT NULL,
-                used BOOLEAN DEFAULT 0
-            )
-        ''')
-        
-        # Clean up old OTPs for this email
-        cursor.execute('DELETE FROM password_reset_otp WHERE email = ?', (email,))
-        
-        # Calculate expiration time (10 minutes from now)
-        expires_at = datetime.now() + timedelta(minutes=10)
-        
-        # Insert new OTP
-        cursor.execute('''
-            INSERT INTO password_reset_otp (email, otp, expires_at)
-            VALUES (?, ?, ?)
-        ''', (email, otp, expires_at))
-        
-        conn.commit()
-        logger.info(f"OTP saved for email: {email}")
+        with conn.cursor() as cursor:
+            # Clean up old OTPs for this email
+            cursor.execute('DELETE FROM password_reset_otp WHERE email = %s', (email,))
+            
+            # Calculate expiration time (10 minutes from now)
+            expires_at = datetime.now() + timedelta(minutes=10)
+            
+            # Insert new OTP
+            cursor.execute('''
+                INSERT INTO password_reset_otp (email, otp, expires_at)
+                VALUES (%s, %s, %s)
+            ''', (email, otp, expires_at))
+            
+            conn.commit()
+            logger.info(f"OTP saved for email: {email}")
 
 def verify_otp(email, otp):
     """Verify OTP and mark as used"""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, expires_at FROM password_reset_otp 
-            WHERE email = ? AND otp = ? AND used = 0
-            ORDER BY created_at DESC LIMIT 1
-        ''', (email, otp))
-        
-        result = cursor.fetchone()
-        if not result:
-            return False, "Invalid OTP"
-        
-        # Check if OTP has expired
-        expires_at = datetime.fromisoformat(result['expires_at'])
-        if datetime.now() > expires_at:
-            return False, "OTP has expired"
-        
-        # Mark OTP as used
-        cursor.execute('UPDATE password_reset_otp SET used = 1 WHERE id = ?', (result['id'],))
-        conn.commit()
-        
-        return True, "OTP verified successfully"
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute('''
+                SELECT id, expires_at FROM password_reset_otp 
+                WHERE email = %s AND otp = %s AND used = FALSE
+                ORDER BY created_at DESC LIMIT 1
+            ''', (email, otp))
+            
+            result = cursor.fetchone()
+            if not result:
+                return False, "Invalid OTP"
+            
+            # Check if OTP has expired
+            if datetime.now() > result['expires_at']:
+                return False, "OTP has expired"
+            
+            # Mark OTP as used
+            cursor.execute('UPDATE password_reset_otp SET used = TRUE WHERE id = %s', (result['id'],))
+            conn.commit()
+            
+            return True, "OTP verified successfully"
 
 def send_otp_email(recipient_email, otp):
     """Send OTP via email"""
@@ -1180,17 +916,17 @@ def reset_user_password(email, new_password):
     try:
         password_hash = generate_password_hash(new_password)
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE users SET password_hash = ? WHERE email = ? AND is_active = 1
-            ''', (password_hash, email))
-            
-            if cursor.rowcount > 0:
-                conn.commit()
-                logger.info(f"Password reset successfully for user: {email}")
-                return True, "Password reset successfully"
-            else:
-                return False, "User not found"
+            with conn.cursor() as cursor:
+                cursor.execute('''
+                    UPDATE users SET password_hash = %s WHERE email = %s AND is_active = TRUE
+                ''', (password_hash, email))
+                
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"Password reset successfully for user: {email}")
+                    return True, "Password reset successfully"
+                else:
+                    return False, "User not found"
     except Exception as e:
         logger.error(f"Error resetting password: {e}")
         return False, f"Error resetting password: {str(e)}"
@@ -1264,7 +1000,7 @@ def profile():
     # Get total logs count
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) as count FROM email_logs WHERE user_id = ?', (session['user_id'],))
+        cursor.execute('SELECT COUNT(*) as count FROM email_logs WHERE user_id = %s', (session['user_id'],))
         total_logs = cursor.fetchone()['count']
     
     return render_template('auth/profile.html', user=user, account_stats=account_stats, total_logs=total_logs)
@@ -1378,7 +1114,7 @@ def send_emails():
         # Validate that the selected sender exists in database
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT id FROM email_accounts WHERE user_id = ? AND email = ? AND is_active = 1', (user_id, selected_sender))
+            cursor.execute('SELECT id FROM email_accounts WHERE user_id = %s AND email = %s AND is_active = 1', (user_id, selected_sender))
             if not cursor.fetchone():
                 flash(f'Selected email account "{selected_sender}" is not configured or inactive.')
                 logger.error(f"Selected sender {selected_sender} not found in database")
@@ -1396,7 +1132,7 @@ def send_emails():
         reset_daily_counts(user_id)
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT sent_count FROM email_accounts WHERE user_id = ? AND email = ?', (user_id, selected_sender))
+            cursor.execute('SELECT sent_count FROM email_accounts WHERE user_id = %s AND email = %s', (user_id, selected_sender))
             account = cursor.fetchone()
             if account and account['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
                 flash(f'Selected account {selected_sender} has reached its daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails.')
@@ -1546,7 +1282,7 @@ def logs():
                    SUM(CASE WHEN es.status = 'failed' THEN 1 ELSE 0 END) as failed_sends
             FROM email_logs el
             LEFT JOIN email_status es ON el.id = es.log_id
-            WHERE el.user_id = ?
+            WHERE el.user_id = %s
             GROUP BY el.id
             ORDER BY el.created_at DESC
             LIMIT 50
@@ -1585,7 +1321,7 @@ def log_details(log_id):
         cursor = conn.cursor()
         
         # Get log info (ensure it belongs to current user)
-        cursor.execute('SELECT * FROM email_logs WHERE id = ? AND user_id = ?', (log_id, user_id))
+        cursor.execute('SELECT * FROM email_logs WHERE id = %s AND user_id = %s', (log_id, user_id))
         log = cursor.fetchone()
         
         if not log:
@@ -1596,7 +1332,7 @@ def log_details(log_id):
         cursor.execute('''
             SELECT recipient_email, sender_email, status, error_message, sent_at
             FROM email_status 
-            WHERE log_id = ?
+            WHERE log_id = %s
             ORDER BY sent_at
         ''', (log_id,))
         
@@ -1622,7 +1358,7 @@ def forgot_password():
         # Check if user exists
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT email FROM users WHERE email = ? AND is_active = 1', (email,))
+            cursor.execute('SELECT email FROM users WHERE email = %s AND is_active = 1', (email,))
             user = cursor.fetchone()
             
             if not user:
