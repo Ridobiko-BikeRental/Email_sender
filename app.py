@@ -21,9 +21,9 @@ from dotenv import load_dotenv
 from openpyxl import load_workbook
 from contextlib import contextmanager
 from functools import wraps
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from psycopg2 import pool
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 import urllib.parse
 
 # Load environment variables
@@ -78,9 +78,10 @@ def get_database_url():
 
 # Create connection pool
 try:
-    connection_pool = psycopg2.pool.SimpleConnectionPool(
-        1, 20,
-        get_database_url()
+    connection_pool = ConnectionPool(
+        get_database_url(),
+        min_size=1,
+        max_size=20
     )
     if connection_pool:
         logger.info("PostgreSQL connection pool created successfully")
@@ -95,14 +96,8 @@ def get_db_connection():
     if not connection_pool:
         raise Exception("Database connection pool not available")
     
-    conn = connection_pool.getconn()
-    try:
+    with connection_pool.connection() as conn:
         yield conn
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        connection_pool.putconn(conn)
 
 # Authentication decorator
 def login_required(f):
@@ -267,7 +262,7 @@ def authenticate_user(email, password):
     """Authenticate user login"""
     try:
         with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            with conn.cursor(row_factory=dict_row) as cursor:
                 cursor.execute('''
                     SELECT id, email, password_hash, full_name, is_active
                     FROM users 
@@ -290,7 +285,7 @@ def authenticate_user(email, password):
 def get_user_by_id(user_id):
     """Get user by ID"""
     with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute('''
                 SELECT id, email, full_name, created_at, last_login
                 FROM users 
@@ -302,7 +297,7 @@ def get_user_by_id(user_id):
 def get_email_accounts(user_id):
     """Get all email accounts for a specific user"""
     with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute('''
                 SELECT id, email, password, is_active, sent_count, last_reset, 
                        default_cc, default_bcc, created_at 
@@ -315,7 +310,7 @@ def get_email_accounts(user_id):
 def get_all_email_accounts(user_id):
     """Get all email accounts for a user including inactive ones"""
     with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute('''
                 SELECT id, email, password, is_active, sent_count, last_reset, 
                        default_cc, default_bcc, created_at 
@@ -387,7 +382,7 @@ def delete_email_account(user_id, account_id):
 def get_account_default_cc_bcc(user_id, sender_email):
     """Get default CC and BCC for a specific account and user"""
     with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute('''
                 SELECT default_cc, default_bcc 
                 FROM email_accounts 
@@ -419,7 +414,7 @@ def get_available_sender(user_id):
     reset_daily_counts(user_id)
     
     with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute('''
                 SELECT email, password, default_cc, default_bcc FROM email_accounts 
                 WHERE user_id = %s AND is_active = TRUE AND sent_count < %s 
@@ -451,7 +446,7 @@ def get_account_stats(user_id):
     reset_daily_counts(user_id)
     
     with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute('''
                 SELECT id, email, sent_count, is_active, default_cc, default_bcc, created_at
                 FROM email_accounts 
@@ -777,7 +772,7 @@ def save_otp(email, otp):
 def verify_otp(email, otp):
     """Verify OTP and mark as used"""
     with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute('''
                 SELECT id, expires_at FROM password_reset_otp 
                 WHERE email = %s AND otp = %s AND used = FALSE
