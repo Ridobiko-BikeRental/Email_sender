@@ -252,7 +252,7 @@ def create_user(email, password, full_name):
                 conn.commit()
                 logger.info(f"Created user: {email}")
                 return True, user_id
-    except psycopg2.IntegrityError:
+    except psycopg.IntegrityError:
         return False, "Email address already exists"
     except Exception as e:
         logger.error(f"Error creating user: {e}")
@@ -332,7 +332,7 @@ def add_email_account(user_id, email, password, default_cc='', default_bcc=''):
                 conn.commit()
                 logger.info(f"Added email account: {email} for user {user_id}")
                 return True, "Email account added successfully"
-    except psycopg2.IntegrityError:
+    except psycopg.IntegrityError:
         return False, "Email account already exists for this user"
     except Exception as e:
         logger.error(f"Error adding email account: {e}")
@@ -356,7 +356,7 @@ def update_email_account(user_id, account_id, email, password, is_active, defaul
                     return True, "Email account updated successfully"
                 else:
                     return False, "Email account not found or access denied"
-    except psycopg2.IntegrityError:
+    except psycopg.IntegrityError:
         return False, "Email address already exists"
     except Exception as e:
         logger.error(f"Error updating email account: {e}")
