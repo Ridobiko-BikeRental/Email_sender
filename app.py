@@ -994,9 +994,9 @@ def profile():
     
     # Get total logs count
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) as count FROM email_logs WHERE user_id = %s', (session['user_id'],))
-        total_logs = cursor.fetchone()['count']
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT COUNT(*) FROM email_logs WHERE user_id = %s', (session['user_id'],))
+            total_logs = cursor.fetchone()[0]
     
     return render_template('auth/profile.html', user=user, account_stats=account_stats, total_logs=total_logs)
 
@@ -1108,12 +1108,12 @@ def send_emails():
         
         # Validate that the selected sender exists in database
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id FROM email_accounts WHERE user_id = %s AND email = %s AND is_active = 1', (user_id, selected_sender))
-            if not cursor.fetchone():
-                flash(f'Selected email account "{selected_sender}" is not configured or inactive.')
-                logger.error(f"Selected sender {selected_sender} not found in database")
-                return redirect(url_for('index'))
+            with conn.cursor() as cursor:
+                cursor.execute('SELECT id FROM email_accounts WHERE user_id = %s AND email = %s AND is_active = TRUE', (user_id, selected_sender))
+                if not cursor.fetchone():
+                    flash(f'Selected email account "{selected_sender}" is not configured or inactive.')
+                    logger.error(f"Selected sender {selected_sender} not found in database")
+                    return redirect(url_for('index'))
     
     # Check if we have any email accounts
     accounts = get_email_accounts(user_id)
@@ -1126,13 +1126,13 @@ def send_emails():
     if sender_mode == 'manual' and selected_sender:
         reset_daily_counts(user_id)
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT sent_count FROM email_accounts WHERE user_id = %s AND email = %s', (user_id, selected_sender))
-            account = cursor.fetchone()
-            if account and account['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
-                flash(f'Selected account {selected_sender} has reached its daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails.')
-                logger.warning(f"Account {selected_sender} has reached daily limit")
-                return redirect(url_for('index'))
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute('SELECT sent_count FROM email_accounts WHERE user_id = %s AND email = %s', (user_id, selected_sender))
+                account = cursor.fetchone()
+                if account and account['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
+                    flash(f'Selected account {selected_sender} has reached its daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails.')
+                    logger.warning(f"Account {selected_sender} has reached daily limit")
+                    return redirect(url_for('index'))
     
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     
@@ -1269,41 +1269,41 @@ def logs():
     """Display email sending logs from database for current user"""
     user_id = session['user_id']
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT el.*, 
-                   COUNT(es.id) as total_recipients,
-                   SUM(CASE WHEN es.status = 'success' THEN 1 ELSE 0 END) as successful_sends,
-                   SUM(CASE WHEN es.status = 'failed' THEN 1 ELSE 0 END) as failed_sends
-            FROM email_logs el
-            LEFT JOIN email_status es ON el.id = es.log_id
-            WHERE el.user_id = %s
-            GROUP BY el.id
-            ORDER BY el.created_at DESC
-            LIMIT 50
-        ''', (user_id,))
-        
-        logs = []
-        for row in cursor.fetchall():
-            log_data = {
-                'id': row['id'],
-                'log_filename': row['log_filename'],
-                'sender_email': row['sender_email'],
-                'sender_mode': row['sender_mode'],
-                'total_emails': row['total_emails'],
-                'sent_count': row['sent_count'],
-                'failed_count': row['failed_count'],
-                'duration_seconds': row['duration_seconds'],
-                'subject': row['subject'],
-                'cc_emails': row['cc_emails'],
-                'bcc_emails': row['bcc_emails'],
-                'attachment_name': row['attachment_name'],
-                'created_at': row['created_at'],
-                'total_recipients': row['total_recipients'] or 0,
-                'successful_sends': row['successful_sends'] or 0,
-                'failed_sends': row['failed_sends'] or 0
-            }
-            logs.append(log_data)
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute('''
+                SELECT el.*, 
+                       COUNT(es.id) as total_recipients,
+                       SUM(CASE WHEN es.status = 'success' THEN 1 ELSE 0 END) as successful_sends,
+                       SUM(CASE WHEN es.status = 'failed' THEN 1 ELSE 0 END) as failed_sends
+                FROM email_logs el
+                LEFT JOIN email_status es ON el.id = es.log_id
+                WHERE el.user_id = %s
+                GROUP BY el.id
+                ORDER BY el.created_at DESC
+                LIMIT 50
+            ''', (user_id,))
+            
+            logs = []
+            for row in cursor.fetchall():
+                log_data = {
+                    'id': row['id'],
+                    'log_filename': row['log_filename'],
+                    'sender_email': row['sender_email'],
+                    'sender_mode': row['sender_mode'],
+                    'total_emails': row['total_emails'],
+                    'sent_count': row['sent_count'],
+                    'failed_count': row['failed_count'],
+                    'duration_seconds': row['duration_seconds'],
+                    'subject': row['subject'],
+                    'cc_emails': row['cc_emails'],
+                    'bcc_emails': row['bcc_emails'],
+                    'attachment_name': row['attachment_name'],
+                    'created_at': row['created_at'],
+                    'total_recipients': row['total_recipients'] or 0,
+                    'successful_sends': row['successful_sends'] or 0,
+                    'failed_sends': row['failed_sends'] or 0
+                }
+                logs.append(log_data)
     
     return render_template('logs.html', logs=logs)
 
@@ -1313,25 +1313,25 @@ def log_details(log_id):
     """Display detailed log information for current user"""
     user_id = session['user_id']
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # Get log info (ensure it belongs to current user)
-        cursor.execute('SELECT * FROM email_logs WHERE id = %s AND user_id = %s', (log_id, user_id))
-        log = cursor.fetchone()
-        
-        if not log:
-            flash('Log not found.')
-            return redirect(url_for('logs'))
-        
-        # Get email statuses
-        cursor.execute('''
-            SELECT recipient_email, sender_email, status, error_message, sent_at
-            FROM email_status 
-            WHERE log_id = %s
-            ORDER BY sent_at
-        ''', (log_id,))
-        
-        email_statuses = cursor.fetchall()
+        with conn.cursor(row_factory=dict_row) as cursor:
+            
+            # Get log info (ensure it belongs to current user)
+            cursor.execute('SELECT * FROM email_logs WHERE id = %s AND user_id = %s', (log_id, user_id))
+            log = cursor.fetchone()
+            
+            if not log:
+                flash('Log not found.')
+                return redirect(url_for('logs'))
+            
+            # Get email statuses
+            cursor.execute('''
+                SELECT recipient_email, sender_email, status, error_message, sent_at
+                FROM email_status 
+                WHERE log_id = %s
+                ORDER BY sent_at
+            ''', (log_id,))
+            
+            email_statuses = cursor.fetchall()
     
     return render_template('log_details.html', log=log, email_statuses=email_statuses)
 
@@ -1352,13 +1352,13 @@ def forgot_password():
         
         # Check if user exists
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT email FROM users WHERE email = %s AND is_active = 1', (email,))
-            user = cursor.fetchone()
-            
-            if not user:
-                flash('If this email exists in our system, you will receive an OTP shortly.', 'info')
-                return render_template('auth/forgot_password.html')
+            with conn.cursor() as cursor:
+                cursor.execute('SELECT email FROM users WHERE email = %s AND is_active = TRUE', (email,))
+                user = cursor.fetchone()
+                
+                if not user:
+                    flash('If this email exists in our system, you will receive an OTP shortly.', 'info')
+                    return render_template('auth/forgot_password.html')
         
         # Generate and send OTP
         otp = generate_otp()
@@ -1439,3 +1439,290 @@ def reset_password():
             flash(message, 'error')
     
     return render_template('auth/reset_password.html')
+
+def send_bulk_emails(user_id, file_path, subject, template, email_column, delay=1, cc_emails=None, bcc_emails=None, attachment_path=None):
+    """Send bulk emails in background with automatic sender rotation for a specific user"""
+    user_status = get_user_email_status(user_id)
+    
+    # Check if we have any email accounts configured
+    accounts = get_email_accounts(user_id)
+    if not accounts:
+        return False, "No email accounts configured. Please add email accounts first."
+    
+    # Parse CC and BCC emails from form
+    form_cc_list = parse_email_list(cc_emails) if cc_emails else []
+    form_bcc_list = parse_email_list(bcc_emails) if bcc_emails else []
+    
+    # Reset status
+    user_status.update({
+        'is_sending': True,
+        'total_emails': 0,
+        'sent_count': 0,
+        'failed_count': 0,
+        'current_email': '',
+        'current_sender': '',
+        'sender_rotation': {},
+        'start_time': None,
+        'failed_emails': [],
+        'success_emails': [],
+        'attachment_name': os.path.basename(attachment_path) if attachment_path else None,
+        'cc_emails': form_cc_list,
+        'bcc_emails': form_bcc_list
+    })
+    
+    df = read_file(file_path)
+    if df is None:
+        user_status['is_sending'] = False
+        return False, "Failed to read file"
+    
+    if email_column not in df.columns:
+        user_status['is_sending'] = False
+        return False, f"Column '{email_column}' not found in file"
+    
+    # Filter out empty emails and count total
+    valid_emails = [row for row in df.data if row.get(email_column, '').strip()]
+    user_status['total_emails'] = len(valid_emails)
+    
+    logger.info(f"Starting bulk email sending to {user_status['total_emails']} recipients for user {user_id}")
+    
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    
+    current_sender = None
+    current_password = None
+    current_default_cc = None
+    current_default_bcc = None
+    emails_sent_with_current = 0
+    
+    for index, row in enumerate(valid_emails):
+        recipient_email = row.get(email_column, '').strip()
+        user_status['current_email'] = recipient_email
+        
+        # Get next available sender if current one reached limit or is None
+        if (current_sender is None or emails_sent_with_current >= EMAIL_LIMIT_PER_ACCOUNT):
+            current_sender, current_password, current_default_cc, current_default_bcc = get_available_sender(user_id)
+            emails_sent_with_current = 0
+            
+            if current_sender is None:
+                logger.error(f"No available sender accounts for user {user_id}")
+                break
+        
+        user_status['current_sender'] = current_sender
+        
+        # Merge form CC/BCC with default CC/BCC for current sender
+        merged_cc, merged_bcc = merge_cc_bcc_lists(
+            cc_emails, bcc_emails, current_default_cc, current_default_bcc
+        )
+        
+        # Replace placeholders in template with row data
+        personalized_message = template
+        for col in df.columns:
+            placeholder = f"{{{col}}}"
+            if placeholder in personalized_message:
+                value = row.get(col, "")
+                personalized_message = personalized_message.replace(placeholder, str(value))
+        
+        success, error_msg = send_email_smtp(
+            smtp_server, smtp_port, current_sender, current_password,
+            recipient_email, subject, personalized_message, user_id, merged_cc, merged_bcc, attachment_path
+        )
+        
+        if success:
+            user_status['sent_count'] += 1
+            user_status['success_emails'].append(recipient_email)
+            emails_sent_with_current += 1
+            
+            # Track which sender sent to which recipients
+            if current_sender not in user_status['sender_rotation']:
+                user_status['sender_rotation'][current_sender] = 0
+            user_status['sender_rotation'][current_sender] += 1
+        else:
+            user_status['failed_count'] += 1
+            user_status['failed_emails'].append(f"{recipient_email}: {error_msg}")
+        
+        # Add delay between emails to avoid being flagged as spam
+        time.sleep(delay)
+    
+    # Email sending completed
+    user_status['is_sending'] = False
+    end_time = datetime.now()
+    duration = end_time - user_status['start_time']
+    
+    # Save detailed log to file and database
+    log_data = {
+        'timestamp': end_time.isoformat(),
+        'duration_seconds': duration.total_seconds(),
+        'total_emails': user_status['total_emails'],
+        'sent_count': user_status['sent_count'],
+        'failed_count': user_status['failed_count'],
+        'success_emails': user_status['success_emails'],
+        'failed_emails': user_status['failed_emails'],
+        'subject': subject,
+        'sender_mode': 'auto',
+        'sender_rotation': user_status['sender_rotation'],
+        'cc_emails': form_cc_list,
+        'bcc_emails': form_bcc_list,
+        'attachment_name': os.path.basename(attachment_path) if attachment_path else '',
+        'account_stats': get_account_stats(user_id)
+    }
+    
+    log_filename = f"bulk_email_log_{user_id}_{end_time.strftime('%Y%m%d_%H%M%S')}.json"
+    
+    # Save to file
+    with open(os.path.join(LOGS_FOLDER, log_filename), 'w') as f:
+        json.dump(log_data, f, indent=2)
+    
+    # Save to database
+    save_email_log(user_id, log_data, log_filename)
+    
+    logger.info(f"Bulk email sending completed for user {user_id}. {user_status['sent_count']} sent, {user_status['failed_count']} failed. Duration: {duration}")
+    
+    return True, {
+        'success_count': user_status['sent_count'],
+        'failed_count': user_status['failed_count'],
+        'failed_emails': user_status['failed_emails'],
+        'duration': str(duration),
+        'log_file': log_filename,
+        'sender_rotation': user_status['sender_rotation']
+    }
+
+def send_bulk_emails_single_sender(user_id, file_path, sender_email, subject, template, email_column, delay=1, cc_emails=None, bcc_emails=None, attachment_path=None):
+    """Send bulk emails using a single specific sender for a specific user"""
+    user_status = get_user_email_status(user_id)
+    
+    # Check if sender exists and has quota
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute('''
+                SELECT email, password, sent_count, is_active, default_cc, default_bcc
+                FROM email_accounts 
+                WHERE user_id = %s AND email = %s AND is_active = TRUE
+            ''', (user_id, sender_email))
+            
+            account = cursor.fetchone()
+            if not account:
+                return False, "Selected sender account not found or inactive"
+            
+            reset_daily_counts(user_id)
+            if account['sent_count'] >= EMAIL_LIMIT_PER_ACCOUNT:
+                return False, f"Selected account has reached daily limit of {EMAIL_LIMIT_PER_ACCOUNT} emails"
+            
+            sender_password = account['password']
+            default_cc = account['default_cc'] or ''
+            default_bcc = account['default_bcc'] or ''
+    
+    # Merge form CC/BCC with default CC/BCC
+    merged_cc, merged_bcc = merge_cc_bcc_lists(cc_emails, bcc_emails, default_cc, default_bcc)
+    
+    # Reset status
+    user_status.update({
+        'is_sending': True,
+        'total_emails': 0,
+        'sent_count': 0,
+        'failed_count': 0,
+        'current_email': '',
+        'current_sender': sender_email,
+        'sender_rotation': {sender_email: 0},
+        'start_time': datetime.now(),
+        'failed_emails': [],
+        'success_emails': [],
+        'attachment_name': os.path.basename(attachment_path) if attachment_path else None,
+        'cc_emails': merged_cc,
+        'bcc_emails': merged_bcc
+    })
+    
+    df = read_file(file_path)
+    if df is None:
+        user_status['is_sending'] = False
+        return False, "Failed to read file"
+    
+    if email_column not in df.columns:
+        user_status['is_sending'] = False
+        return False, f"Column '{email_column}' not found in file"
+    
+    # Filter out empty emails and count total
+    valid_emails = [row for row in df.data if row.get(email_column, '').strip()]
+    user_status['total_emails'] = len(valid_emails)
+    
+    # Check if we can send all emails with this account
+    remaining_quota = EMAIL_LIMIT_PER_ACCOUNT - account['sent_count']
+    if len(valid_emails) > remaining_quota:
+        user_status['is_sending'] = False
+        return False, f"Cannot send {len(valid_emails)} emails. Account {sender_email} has only {remaining_quota} emails remaining today."
+    
+    logger.info(f"Starting bulk email sending to {user_status['total_emails']} recipients from {sender_email} for user {user_id}")
+    
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    
+    for index, row in enumerate(valid_emails):
+        recipient_email = row.get(email_column, '').strip()
+        user_status['current_email'] = recipient_email
+        
+        # Replace placeholders in template with row data
+        personalized_message = template
+        for col in df.columns:
+            placeholder = f"{{{col}}}"
+            if placeholder in personalized_message:
+                value = row.get(col, "")
+                personalized_message = personalized_message.replace(placeholder, str(value))
+        
+        success, error_msg = send_email_smtp(
+            smtp_server, smtp_port, sender_email, sender_password,
+            recipient_email, subject, personalized_message, user_id, merged_cc, merged_bcc, attachment_path
+        )
+        
+        if success:
+            user_status['sent_count'] += 1
+            user_status['success_emails'].append(recipient_email)
+            user_status['sender_rotation'][sender_email] += 1
+        else:
+            user_status['failed_count'] += 1
+            user_status['failed_emails'].append(f"{recipient_email}: {error_msg}")
+        
+        # Add delay between emails to avoid being flagged as spam
+        time.sleep(delay)
+    
+    # Email sending completed
+    user_status['is_sending'] = False
+    end_time = datetime.now()
+    duration = end_time - user_status['start_time']
+    
+    # Save detailed log to file and database
+    log_data = {
+        'timestamp': end_time.isoformat(),
+        'duration_seconds': duration.total_seconds(),
+        'total_emails': user_status['total_emails'],
+        'sent_count': user_status['sent_count'],
+        'failed_count': user_status['failed_count'],
+        'success_emails': user_status['success_emails'],
+        'failed_emails': user_status['failed_emails'],
+        'subject': subject,
+        'sender_email': sender_email,
+        'sender_mode': 'manual',
+        'sender_rotation': user_status['sender_rotation'],
+        'cc_emails': merged_cc,
+        'bcc_emails': merged_bcc,
+        'attachment_name': os.path.basename(attachment_path) if attachment_path else '',
+        'account_stats': get_account_stats(user_id)
+    }
+    
+    log_filename = f"bulk_email_log_{user_id}_{end_time.strftime('%Y%m%d_%H%M%S')}.json"
+    
+    # Save to file
+    with open(os.path.join(LOGS_FOLDER, log_filename), 'w') as f:
+        json.dump(log_data, f, indent=2)
+    
+    # Save to database
+    save_email_log(user_id, log_data, log_filename)
+    
+    logger.info(f"Bulk email sending completed from {sender_email} for user {user_id}. {user_status['sent_count']} sent, {user_status['failed_count']} failed. Duration: {duration}")
+    
+    return True, {
+        'success_count': user_status['sent_count'],
+        'failed_count': user_status['failed_count'],
+        'failed_emails': user_status['failed_emails'],
+        'duration': str(duration),
+        'log_file': log_filename,
+        'sender_rotation': user_status['sender_rotation']
+    }
